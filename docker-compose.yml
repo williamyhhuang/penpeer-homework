@@ -1,4 +1,4 @@
-version: "2.1"
+version: "3.3"
 
 services:
   # ── PostgreSQL 18.3 ────────────────────────────────────────────────────────
@@ -39,7 +39,6 @@ services:
     build:
       context: ./src/backend
       dockerfile: Dockerfile
-    container_name: shortlink-backend
     environment:
       DB_HOST:     postgres
       DB_PORT:     "5432"
@@ -49,13 +48,24 @@ services:
       REDIS_HOST:  redis
       REDIS_PORT:  "6379"
       SERVER_PORT: "8080"
-    ports:
-      - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # 以 --scale backend=3 啟動三個副本（docker-compose up --scale backend=3）
+    # deploy.replicas 只在 Swarm 模式下生效，一般 compose 須用 --scale 旗標
+
+  # ── Load Balancer ─────────────────────────────────────────────────────────
+  loadbalancer:
+    image: nginx:alpine
+    container_name: shortlink-lb
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
 
   # ── Frontend ──────────────────────────────────────────────────────────────
   frontend:
@@ -66,7 +76,7 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      - loadbalancer
 
 volumes:
   postgres_data:
