@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config:*)",
+      "WebSearch",
+      "Bash(go mod:*)",
+      "Bash(go build:*)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(go vet:*)",
+      "Bash(go test:*)"
+    ]
+  }
+}
