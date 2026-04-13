@@ -30,35 +30,35 @@
 ## 核心功能實作
 
 ### Phase 1 — 核心 Redirect（最小可用）
-- [ ] Domain Model 定義（ShortLink、ReferralCode、ClickEvent）
-- [ ] PostgreSQL schema 設計
-- [ ] `CreateShortLink` Use Case
-- [ ] `RedirectShortLink` Use Case
-- [ ] Gin HTTP Handler
-- [ ] Redis 快取短碼（降低 redirect 延遲）
-- [ ] Docker Compose 整合（PostgreSQL + Redis + Backend）
+- [x] Domain Model 定義（ShortLink、ReferralCode、ClickEvent）
+- [x] PostgreSQL schema 設計
+- [x] `CreateShortLink` Use Case
+- [x] `RedirectShortLink` Use Case
+- [x] Gin HTTP Handler
+- [x] Redis 快取短碼（降低 redirect 延遲）
+- [x] Docker Compose 整合（PostgreSQL + Redis + Backend）
 
 ### Phase 2 — 社群功能
-- [ ] OG Scraper：建立短網址時抓取原始頁面的 og:title / og:description / og:image，存入 DB
-- [ ] User-Agent 偵測：區分社群 Bot 與一般使用者
+- [x] OG Scraper：建立短網址時抓取原始頁面的 og:title / og:description / og:image，存入 DB
+- [x] User-Agent 偵測：區分社群 Bot 與一般使用者
   - Bot → 回傳含 OG meta tags 的 HTML（讓社群平台顯示預覽）
   - 一般使用者 → 302 redirect 到原始 URL
-- [ ] 推薦碼綁定與記錄（`?ref=user123`）
-- [ ] 支援的 Bot 清單：facebookexternalhit、Twitterbot、LinkedInBot、TelegramBot、WhatsApp、Slackbot、Discordbot
+- [x] 推薦碼綁定與記錄（`?ref=user123`）
+- [x] 支援的 Bot 清單：facebookexternalhit、Twitterbot、LinkedInBot、TelegramBot、WhatsApp、Slackbot、Discordbot
 
 ### Phase 3 — Analytics
-- [ ] ClickEvent 非同步寫入（goroutine，不阻塞 redirect）
-- [ ] 記錄：點擊次數、來源平台、地區、裝置
-- [ ] 歸因查詢 API（推薦者 / 行銷活動）
+- [x] ClickEvent 非同步寫入（goroutine，不阻塞 redirect）
+- [x] 記錄：點擊次數、來源平台、地區、裝置
+- [x] 歸因查詢 API（推薦者 / 行銷活動）
 
 ### Phase 4 — 前端
-- [ ] 建立短網址頁面（輸入長網址 → 取得短碼）
-- [ ] Analytics Dashboard（點擊統計視覺化）
+- [x] 建立短網址頁面（輸入長網址 → 取得短碼）
+- [x] Analytics Dashboard（點擊統計視覺化）
 
 ### Phase 5 — 測試與收尾
-- [ ] 每個 Use Case 單元測試
-- [ ] docker-compose 整體驗證
-- [ ] README 撰寫（含 Quick Test 步驟）
+- [x] 每個 Use Case 單元測試
+- [x] docker-compose 整體驗證
+- [x] README 撰寫（含 Quick Test 步驟）
 
 ---
 
