@@ -143,6 +143,44 @@ curl http://localhost:8080/api/v1/links/aB3xYz/preview
 | 非同步寫入 | 302 回應後，goroutine 非同步寫入 ClickEvent，不阻塞使用者 |
 | OG 預先抓取 | 建立時抓好存 DB，Bot 來時直接讀取，不重複請求外部頁面 |
 
+## Redis 快取機制
+
+### 快取流程
+
+```
+Redirect 請求
+    │
+    ├─→ [1] GetShortLink(code)
+    │       ├─→ null cache 命中 → 直接回傳 404（不查 DB）
+    │       ├─→ cache hit      → 回傳快取資料
+    │       └─→ cache miss ──→ [2] singleflight.Do(code)
+    │                               │  ← 同一 code 的並發請求在此等待 →
+    │                               ├─→ FindByCode(DB)
+    │                               │       ├─→ 找到 → SetShortLink（回填快取）
+    │                               │       └─→ 找不到 → SetNullCache（寫入不存在標記）
+    │                               └─→ 回傳結果給所有等待的 goroutine
+    └─→ 302 redirect / OG HTML
+```
+
+### 三層快取防護
+
+| 防護 | 問題情境 | 實作方式 | 位置 |
+|------|---------|---------|------|
+| **雪崩 (Avalanche)** | 大量 key 同時過期，DB 瞬間承受全部流量 | TTL 基礎 24h ± 20% 隨機 jitter，實際範圍 19.2h ～ 28.8h | `infrastructure/redis/cache.go` `jitteredTTL()` |
+| **擊穿 (Stampede)** | 熱點 key 過期瞬間，N 個並發請求同時 cache miss | `singleflight.Group`：同一 code 並發 miss 只有 1 個 goroutine 查 DB，其餘共用結果 | `application/usecase/redirect_short_link.go` |
+| **穿透 (Penetration)** | 不存在的 code 每次請求都打到 DB | DB 回 nil 時寫入 `__null__` 標記（TTL 5 分鐘），後續請求由 `ErrNullCache` 直接拒絕 | `infrastructure/redis/cache.go` `SetNullCache()` |
+
+### Cache Key 設計
+
+```
+shortlink:{code}      ← 正常短網址資料（TTL: 19.2h ～ 28.8h）
+shortlink:{code}      ← 值為 "__null__" 代表此 code 不存在（TTL: 5 分鐘）
+```
+
+### Sentinel Error 架構
+
+`ErrNullCache` 定義於 `domain/shortlink/errors.go`，讓 `application` 與 `infrastructure` 雙層均可 import，不破壞 DDD 分層依賴方向。
+
 ## 後端單元測試
 
 ```bash
