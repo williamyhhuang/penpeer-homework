@@ -1,2 +1,36 @@
-request.pdf
+# ── 敏感設定檔 ────────────────────────────────────────────────────────────────
 .env
+.env.local
+.env.*.local
+
+# ── 需求文件（二進位，不入版控）────────────────────────────────────────────────
+docs/request.pdf
+
+# ── Go 後端 ───────────────────────────────────────────────────────────────────
+src/backend/bin/
+src/backend/tmp/
+src/backend/vendor/
+src/backend/coverage.out
+src/backend/coverage.html
+*.exe
+*.test
+
+# ── Node / React 前端 ─────────────────────────────────────────────────────────
+src/frontend/node_modules/
+src/frontend/dist/
+src/frontend/.vite/
+src/frontend/coverage/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Docker 本地 volume 備份 ───────────────────────────────────────────────────
+*.tar
+*.dump
