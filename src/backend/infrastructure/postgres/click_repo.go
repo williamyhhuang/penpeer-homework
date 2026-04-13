@@ -112,3 +112,34 @@ func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*
 
 	return stats, nil
 }
+
+// GetRanking 查詢所有短碼的點擊總數並依降冪排序
+// LEFT JOIN 確保 0 點擊的短碼也出現在排行榜
+func (r *ClickRepo) GetRanking(ctx context.Context) ([]click.CodeRanking, error) {
+	var rows []struct {
+		Code        string `db:"code"`
+		OriginalURL string `db:"original_url"`
+		TotalClicks int64  `db:"total_clicks"`
+	}
+	err := r.db.SelectContext(ctx, &rows, `
+		SELECT sl.code, sl.original_url, COUNT(ce.id) AS total_clicks
+		FROM short_links sl
+		LEFT JOIN click_events ce ON sl.code = ce.short_link_code
+		GROUP BY sl.code, sl.original_url
+		ORDER BY total_clicks DESC, sl.code ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	rankings := make([]click.CodeRanking, len(rows))
+	for i, row := range rows {
+		rankings[i] = click.CodeRanking{
+			Rank:        i + 1,
+			Code:        row.Code,
+			OriginalURL: row.OriginalURL,
+			TotalClicks: row.TotalClicks,
+		}
+	}
+	return rankings, nil
+}

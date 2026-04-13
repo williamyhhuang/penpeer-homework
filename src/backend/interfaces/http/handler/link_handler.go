@@ -12,17 +12,20 @@ type LinkHandler struct {
 	createUC    *usecase.CreateShortLinkUseCase
 	previewUC   *usecase.GetPreviewUseCase
 	analyticsUC *usecase.GetAnalyticsUseCase
+	rankingUC   *usecase.GetRankingUseCase
 }
 
 func NewLinkHandler(
 	createUC *usecase.CreateShortLinkUseCase,
 	previewUC *usecase.GetPreviewUseCase,
 	analyticsUC *usecase.GetAnalyticsUseCase,
+	rankingUC *usecase.GetRankingUseCase,
 ) *LinkHandler {
 	return &LinkHandler{
 		createUC:    createUC,
 		previewUC:   previewUC,
 		analyticsUC: analyticsUC,
+		rankingUC:   rankingUC,
 	}
 }
 
@@ -89,4 +92,14 @@ func (h *LinkHandler) GetAnalytics(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// GET /api/v1/links/ranking
+func (h *LinkHandler) GetRanking(c *gin.Context) {
+	items, err := h.rankingUC.Execute(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ranking": items})
 }

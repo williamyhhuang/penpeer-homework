@@ -44,3 +44,11 @@ type ClickStats struct {
 	ByRegion     map[string]int64
 	ByReferral   map[string]int64
 }
+
+// CodeRanking 單一短碼的排名資訊，供全域排行榜使用
+type CodeRanking struct {
+	Rank        int
+	Code        string
+	OriginalURL string
+	TotalClicks int64
+}

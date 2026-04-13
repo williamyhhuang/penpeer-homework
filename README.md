@@ -52,7 +52,8 @@ src/
 | `POST` | `/api/v1/links` | 建立短網址（含 OG 抓取） |
 | `GET` | `/:code` | 短網址跳轉（Bot 回傳 OG HTML，使用者 302 redirect） |
 | `GET` | `/api/v1/links/:code/preview` | 取得 OG 預覽資料 |
-| `GET` | `/api/v1/links/:code/analytics` | 點擊統計與推薦歸因 |
+| `GET` | `/api/v1/links/ranking` | 所有短碼點擊數排行榜 |
+| `GET` | `/api/v1/links/:code/analytics` | 單碼點擊統計與推薦歸因 |
 | `GET` | `/health` | 健康檢查 |
 
 ## 快速啟動
@@ -72,7 +73,8 @@ docker-compose up --build
 | 服務 | URL |
 |------|-----|
 | 前端（建立短網址） | http://localhost:3000 |
-| Analytics Dashboard | http://localhost:3000/analytics/{code} |
+| 排行榜 Dashboard | http://localhost:3000/analytics |
+| 單碼 Analytics | http://localhost:3000/analytics/{code} |
 | 後端 API | http://localhost:8080 |
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |

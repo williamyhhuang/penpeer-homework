@@ -64,8 +64,9 @@ func main() {
 	redirectUC  := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
 	previewUC   := usecase.NewGetPreviewUseCase(linkRepo)
 	analyticsUC := usecase.NewGetAnalyticsUseCase(linkRepo, clickRepo)
+	rankingUC   := usecase.NewGetRankingUseCase(clickRepo)
 
-	linkHandler     := handler.NewLinkHandler(createUC, previewUC, analyticsUC)
+	linkHandler     := handler.NewLinkHandler(createUC, previewUC, analyticsUC, rankingUC)
 	redirectHandler := handler.NewRedirectHandler(redirectUC)
 
 	// ── 啟動 HTTP 伺服器 ──────────────────────────────────────────────────

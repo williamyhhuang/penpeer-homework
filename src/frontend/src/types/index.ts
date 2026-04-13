@@ -23,3 +23,10 @@ export interface AnalyticsData {
   by_region: Record<string, number>;
   by_referral: Record<string, number>;
 }
+
+export interface RankingItem {
+  rank: number;
+  code: string;
+  original_url: string;
+  total_clicks: number;
+}

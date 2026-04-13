@@ -56,6 +56,26 @@ func (m *mockClickRepo) Save(_ context.Context, event *click.ClickEvent) error {
 	return nil
 }
 
+func (m *mockClickRepo) GetRanking(_ context.Context) ([]click.CodeRanking, error) {
+	// 彙整每個短碼的點擊總數
+	counts := make(map[string]int64)
+	for _, e := range m.events {
+		counts[e.ShortLinkCode]++
+	}
+	rankings := make([]click.CodeRanking, 0, len(counts))
+	rank := 1
+	for code, total := range counts {
+		rankings = append(rankings, click.CodeRanking{
+			Rank:        rank,
+			Code:        code,
+			OriginalURL: "",
+			TotalClicks: total,
+		})
+		rank++
+	}
+	return rankings, nil
+}
+
 func (m *mockClickRepo) GetStatsByCode(_ context.Context, code string) (*click.ClickStats, error) {
 	stats := &click.ClickStats{
 		ByPlatform:   make(map[click.Platform]int64),

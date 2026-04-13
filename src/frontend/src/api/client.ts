@@ -1,4 +1,4 @@
-import type { ShortLink, PreviewData, AnalyticsData } from "../types";
+import type { ShortLink, PreviewData, AnalyticsData, RankingItem } from "../types";
 
 const BASE_URL = "/api/v1";
 
@@ -27,4 +27,8 @@ export const api = {
   /** 取得點擊統計 */
   getAnalytics: (code: string): Promise<AnalyticsData> =>
     request(`/links/${code}/analytics`),
+
+  /** 取得所有短碼點擊數排行榜 */
+  getRanking: (): Promise<{ ranking: RankingItem[] }> =>
+    request("/links/ranking"),
 };

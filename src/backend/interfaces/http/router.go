@@ -24,6 +24,8 @@ func NewRouter(
 		links := api.Group("/links")
 		{
 			links.POST("", linkHandler.CreateShortLink)
+			// 靜態路由需在參數路由前宣告，否則 Gin 會將 "ranking" 解析為 :code
+			links.GET("/ranking", linkHandler.GetRanking)
 			links.GET("/:code/preview", linkHandler.GetPreview)
 			links.GET("/:code/analytics", linkHandler.GetAnalytics)
 		}
