@@ -23,7 +23,7 @@ func TestRedirect_NormalUser_Returns302(t *testing.T) {
 	}
 	_ = linkRepo.Save(context.Background(), link)
 
-	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
 
 	out, err := uc.Execute(context.Background(), usecase.RedirectInput{
 		Code:      "abc1234",
@@ -56,7 +56,7 @@ func TestRedirect_FacebookBot_ReturnsOGHTML(t *testing.T) {
 	}
 	_ = linkRepo.Save(context.Background(), link)
 
-	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
 
 	out, err := uc.Execute(context.Background(), usecase.RedirectInput{
 		Code:      "abc1234",
@@ -79,7 +79,7 @@ func TestRedirect_NotFound(t *testing.T) {
 	clickRepo := &mockClickRepo{}
 	cache     := newMockCache()
 
-	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
 
 	_, err := uc.Execute(context.Background(), usecase.RedirectInput{
 		Code:      "notexist",
@@ -101,7 +101,7 @@ func TestRedirect_NullCache_SkipsDB(t *testing.T) {
 	// 預先把 "ghost" 標記為 null cache（模擬之前已確認 DB 不存在）
 	_ = cache.SetNullCache(context.Background(), "ghost")
 
-	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
 
 	_, err := uc.Execute(context.Background(), usecase.RedirectInput{
 		Code:      "ghost",
@@ -131,7 +131,7 @@ func TestRedirect_Singleflight_DeduplicatesDB(t *testing.T) {
 	_ = linkRepo.Save(context.Background(), link)
 	// 不寫入 cache，讓所有請求都 cache miss
 
-	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
 
 	const concurrent = 10
 	var wg sync.WaitGroup
@@ -166,7 +166,7 @@ func TestRedirect_CacheHit(t *testing.T) {
 	}
 	_ = cache.SetShortLink(context.Background(), link)
 
-	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache)
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
 
 	out, err := uc.Execute(context.Background(), usecase.RedirectInput{
 		Code:      "cached1",

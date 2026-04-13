@@ -15,28 +15,40 @@ const (
 	// shortLinkBaseTTL 短網址快取基礎 TTL
 	shortLinkBaseTTL = 24 * time.Hour
 	// shortLinkJitter ±20% 隨機抖動，防止大量 key 在同一時刻集體過期（快取雪崩）
-	shortLinkJitter = 288 * time.Minute // 24h * 20% = 4.8h ≈ 288 min
+	shortLinkJitter = 288 * time.Minute // 24h × 20% = 4.8h
 
-	// nullCacheTTL 不存在短碼的快取時間，較短避免佔用記憶體（防快取穿透）
+	// nullCacheTTL 不存在短碼的快取時間，較短避免佔用過多記憶體（防快取穿透）
 	nullCacheTTL = 5 * time.Minute
 	// nullValue Redis 中標記「此短碼不存在於 DB」的哨兵值
 	nullValue = "__null__"
 
-	keyPrefix = "shortlink:"
+	keyPrefix    = "shortlink:"
+	// nullIndexKey sorted set：score=寫入時間戳(ns)，member=short code
+	// 用於水位到達時能快速找到最舊的 null cache key 進行淘汰
+	nullIndexKey = "nullcache:index"
 )
+
+// NullCacheConfig null cache 水位管控設定
+type NullCacheConfig struct {
+	// MaxKeys 水位閥值：null cache key 數量超過此值即觸發淘汰
+	MaxKeys int64
+	// EvictCount 每次觸發淘汰時，移除最舊的 key 數量
+	EvictCount int64
+}
 
 // Cache 封裝 Redis 操作，提供短網址的快取功能
 type Cache struct {
-	client *redis.Client
+	client  *redis.Client
+	nullCfg NullCacheConfig
 }
 
-func NewCache(host, port, password string, db int) *Cache {
+func NewCache(host, port, password string, db int, nullCfg NullCacheConfig) *Cache {
 	client := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", host, port),
 		Password: password,
 		DB:       db,
 	})
-	return &Cache{client: client}
+	return &Cache{client: client, nullCfg: nullCfg}
 }
 
 func (c *Cache) Ping(ctx context.Context) error {
@@ -84,10 +96,51 @@ func (c *Cache) GetShortLink(ctx context.Context, code string) (*shortlink.Short
 	return &link, nil
 }
 
-// SetNullCache 將不存在的短碼寫入快取作為哨兵，防止相同請求反覆查 DB（快取穿透防護）
+// SetNullCache 將不存在的短碼寫入快取作為哨兵，並同步更新 sorted set 索引
+// 當 sorted set 大小超過水位閥值，非同步淘汰最舊的 key（防記憶體爆炸）
 func (c *Cache) SetNullCache(ctx context.Context, code string) error {
 	key := keyPrefix + code
-	return c.client.Set(ctx, key, nullValue, nullCacheTTL).Err()
+
+	// 用 pipeline 同時寫入 null 值與 sorted set 索引（原子性提升）
+	pipe := c.client.Pipeline()
+	pipe.Set(ctx, key, nullValue, nullCacheTTL)
+	pipe.ZAdd(ctx, nullIndexKey, redis.Z{
+		Score:  float64(time.Now().UnixNano()),
+		Member: code,
+	})
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+
+	// 非同步觸發水位檢查，不阻塞寫入主流程
+	go c.evictIfOverWatermark(context.Background())
+	return nil
+}
+
+// evictIfOverWatermark 當 null cache 索引超過水位閥值時，淘汰最舊的 EvictCount 個 key
+// 透過 sorted set 的 ZPOPMIN 取得最舊 code 並批次刪除，保持 O(log N) 效率
+func (c *Cache) evictIfOverWatermark(ctx context.Context) {
+	count, err := c.client.ZCard(ctx, nullIndexKey).Result()
+	if err != nil || count <= c.nullCfg.MaxKeys {
+		return
+	}
+
+	// ZPOPMIN：原子地取出並移除 sorted set 中分數最小（最舊）的 EvictCount 個 member
+	items, err := c.client.ZPopMin(ctx, nullIndexKey, c.nullCfg.EvictCount).Result()
+	if err != nil || len(items) == 0 {
+		return
+	}
+
+	// 批次刪除對應的 shortlink key
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		if code, ok := item.Member.(string); ok {
+			keys = append(keys, keyPrefix+code)
+		}
+	}
+	if len(keys) > 0 {
+		c.client.Del(ctx, keys...)
+	}
 }
 
 // DeleteShortLink 從快取刪除短網址

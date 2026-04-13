@@ -14,7 +14,7 @@ func TestCreateShortLink_Success(t *testing.T) {
 	cache        := newMockCache()
 	sc           := scraper.NewOGScraper()
 
-	uc := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, sc)
+	uc := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, sc, nil)
 
 	out, err := uc.Execute(context.Background(), usecase.CreateShortLinkInput{
 		URL: "https://www.google.com",
@@ -51,7 +51,7 @@ func TestCreateShortLink_WithReferral(t *testing.T) {
 	cache        := newMockCache()
 	sc           := scraper.NewOGScraper()
 
-	uc := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, sc)
+	uc := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, sc, nil)
 
 	out, err := uc.Execute(context.Background(), usecase.CreateShortLinkInput{
 		URL:             "https://www.example.com",
@@ -75,7 +75,7 @@ func TestCreateShortLink_InvalidURL(t *testing.T) {
 	cache        := newMockCache()
 	sc           := scraper.NewOGScraper()
 
-	uc := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, sc)
+	uc := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, sc, nil)
 
 	tests := []struct {
 		name string

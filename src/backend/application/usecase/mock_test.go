@@ -31,6 +31,14 @@ func (m *mockShortLinkRepo) FindByCode(_ context.Context, code string) (*shortli
 	return m.store[code], nil
 }
 
+func (m *mockShortLinkRepo) FindAllCodes(_ context.Context) ([]string, error) {
+	codes := make([]string, 0, len(m.store))
+	for code := range m.store {
+		codes = append(codes, code)
+	}
+	return codes, nil
+}
+
 // mockReferralRepo 模擬 referral.Repository
 type mockReferralRepo struct {
 	store map[string]*referral.ReferralCode

@@ -3,20 +3,22 @@ package http
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/penpeer/shortlink/interfaces/http/handler"
+	"github.com/penpeer/shortlink/interfaces/http/middleware"
 )
 
 // NewRouter 建立 Gin 路由，依照 API 設計掛載所有 handler
 func NewRouter(
-	linkHandler    *handler.LinkHandler,
+	linkHandler     *handler.LinkHandler,
 	redirectHandler *handler.RedirectHandler,
+	rlCfg           middleware.RateLimitConfig,
 ) *gin.Engine {
 	r := gin.Default()
 
 	// CORS：允許前端跨來源請求
 	r.Use(corsMiddleware())
 
-	// 短網址核心 redirect（效能關鍵路徑，放在最前面）
-	r.GET("/:code", redirectHandler.Redirect)
+	// 短網址核心 redirect（效能關鍵路徑，per-IP rate limit 防止惡意掃碼）
+	r.GET("/:code", middleware.RateLimitMiddleware(rlCfg), redirectHandler.Redirect)
 
 	// REST API
 	api := r.Group("/api/v1")

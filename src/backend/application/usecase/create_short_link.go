@@ -35,6 +35,7 @@ type CreateShortLinkUseCase struct {
 	referralRepo referral.Repository
 	cache        ShortLinkCache
 	scraper      *scraper.OGScraper
+	bloom        CodeBloom // 建立成功後更新 bloom filter，確保後續 redirect 不誤判
 }
 
 func NewCreateShortLinkUseCase(
@@ -42,12 +43,14 @@ func NewCreateShortLinkUseCase(
 	referralRepo referral.Repository,
 	cache ShortLinkCache,
 	sc *scraper.OGScraper,
+	bloom CodeBloom,
 ) *CreateShortLinkUseCase {
 	return &CreateShortLinkUseCase{
 		linkRepo:     linkRepo,
 		referralRepo: referralRepo,
 		cache:        cache,
 		scraper:      sc,
+		bloom:        bloom,
 	}
 }
 
@@ -89,9 +92,14 @@ func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShort
 	// 快取失敗不中斷主流程，只影響效能
 	_ = uc.cache.SetShortLink(ctx, link)
 
+	// 7. 更新 bloom filter，確保後續 redirect 不會因 filter 未知此 code 而誤判為不存在
+	if uc.bloom != nil {
+		uc.bloom.Add(link.Code)
+	}
+
 	out := &CreateShortLinkOutput{ShortLink: link}
 
-	// 7. 若有推薦碼需求，同時建立推薦碼
+	// 8. 若有推薦碼需求，同時建立推薦碼
 	if input.ReferralOwnerID != "" {
 		refCode := &referral.ReferralCode{
 			Code:          fmt.Sprintf("%s-%s", input.ReferralOwnerID, code),

@@ -44,6 +44,7 @@ type RedirectShortLinkUseCase struct {
 	linkRepo  shortlink.Repository
 	clickRepo click.Repository
 	cache     RedirectCache
+	bloom     CodeBloom // 第一道篩查：確定不存在的 code 直接拒絕，不查 Redis 也不查 DB
 	// sfGroup 防止快取擊穿：同一 code 的並發 miss 只允許一個 goroutine 查 DB
 	sfGroup singleflight.Group
 }
@@ -52,15 +53,23 @@ func NewRedirectShortLinkUseCase(
 	linkRepo shortlink.Repository,
 	clickRepo click.Repository,
 	cache RedirectCache,
+	bloom CodeBloom,
 ) *RedirectShortLinkUseCase {
 	return &RedirectShortLinkUseCase{
 		linkRepo:  linkRepo,
 		clickRepo: clickRepo,
 		cache:     cache,
+		bloom:     bloom,
 	}
 }
 
 func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectInput) (*RedirectOutput, error) {
+	// 0. Bloom filter 第一道篩查：確定不存在的 code 直接拒絕
+	// false → 肯定不在 DB，無需查 Redis 或 DB（防快取穿透 + 降低無效請求成本）
+	if uc.bloom != nil && !uc.bloom.MightExist(input.Code) {
+		return nil, fmt.Errorf("短碼不存在: %s", input.Code)
+	}
+
 	// 1. 優先查 Redis 快取（降低 redirect 延遲，這是效能關鍵路徑）
 	link, err := uc.cache.GetShortLink(ctx, input.Code)
 

@@ -53,6 +53,14 @@ func (r *ShortLinkRepo) Save(ctx context.Context, link *shortlink.ShortLink) err
 	return err
 }
 
+func (r *ShortLinkRepo) FindAllCodes(ctx context.Context) ([]string, error) {
+	var codes []string
+	if err := r.db.SelectContext(ctx, &codes, "SELECT code FROM short_links"); err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
 func (r *ShortLinkRepo) FindByCode(ctx context.Context, code string) (*shortlink.ShortLink, error) {
 	var row dbShortLink
 	err := r.db.GetContext(ctx, &row, "SELECT * FROM short_links WHERE code = $1", code)
