@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/penpeer/shortlink/domain/click"
 	"github.com/penpeer/shortlink/domain/referral"
@@ -12,7 +13,8 @@ import (
 
 // mockShortLinkRepo 模擬 shortlink.Repository，不依賴真實 DB
 type mockShortLinkRepo struct {
-	store map[string]*shortlink.ShortLink
+	store     map[string]*shortlink.ShortLink
+	findCalls atomic.Int64 // 記錄 FindByCode 被呼叫的次數，用於驗證 singleflight 效果
 }
 
 func newMockShortLinkRepo() *mockShortLinkRepo {
@@ -25,6 +27,7 @@ func (m *mockShortLinkRepo) Save(_ context.Context, link *shortlink.ShortLink) e
 }
 
 func (m *mockShortLinkRepo) FindByCode(_ context.Context, code string) (*shortlink.ShortLink, error) {
+	m.findCalls.Add(1)
 	return m.store[code], nil
 }
 
@@ -102,11 +105,15 @@ func (m *mockClickRepo) GetStatsByCode(_ context.Context, code string) (*click.C
 
 // mockCache 模擬 Redis Cache（同時實作 ShortLinkCache 與 RedirectCache 介面）
 type mockCache struct {
-	store map[string]*shortlink.ShortLink
+	store   map[string]*shortlink.ShortLink
+	nullSet map[string]bool // 記錄哪些 code 被標記為不存在（null cache）
 }
 
 func newMockCache() *mockCache {
-	return &mockCache{store: make(map[string]*shortlink.ShortLink)}
+	return &mockCache{
+		store:   make(map[string]*shortlink.ShortLink),
+		nullSet: make(map[string]bool),
+	}
 }
 
 func (m *mockCache) SetShortLink(_ context.Context, link *shortlink.ShortLink) error {
@@ -115,5 +122,13 @@ func (m *mockCache) SetShortLink(_ context.Context, link *shortlink.ShortLink) e
 }
 
 func (m *mockCache) GetShortLink(_ context.Context, code string) (*shortlink.ShortLink, error) {
+	if m.nullSet[code] {
+		return nil, shortlink.ErrNullCache
+	}
 	return m.store[code], nil
+}
+
+func (m *mockCache) SetNullCache(_ context.Context, code string) error {
+	m.nullSet[code] = true
+	return nil
 }

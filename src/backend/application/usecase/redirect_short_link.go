@@ -2,10 +2,13 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/penpeer/shortlink/application/uadetect"
 	"github.com/penpeer/shortlink/domain/click"
@@ -13,9 +16,11 @@ import (
 )
 
 // RedirectCache 定義 redirect 路徑所需的快取介面
+// GetShortLink 回傳 (nil, shortlink.ErrNullCache) 代表此 code 已被標記不存在，不需查 DB
 type RedirectCache interface {
 	GetShortLink(ctx context.Context, code string) (*shortlink.ShortLink, error)
 	SetShortLink(ctx context.Context, link *shortlink.ShortLink) error
+	SetNullCache(ctx context.Context, code string) error
 }
 
 // RedirectInput redirect 請求的輸入資訊
@@ -36,9 +41,11 @@ type RedirectOutput struct {
 
 // RedirectShortLinkUseCase 實作「短網址重新導向」的核心業務邏輯
 type RedirectShortLinkUseCase struct {
-	linkRepo   shortlink.Repository
-	clickRepo  click.Repository
-	cache      RedirectCache
+	linkRepo  shortlink.Repository
+	clickRepo click.Repository
+	cache     RedirectCache
+	// sfGroup 防止快取擊穿：同一 code 的並發 miss 只允許一個 goroutine 查 DB
+	sfGroup singleflight.Group
 }
 
 func NewRedirectShortLinkUseCase(
@@ -56,22 +63,37 @@ func NewRedirectShortLinkUseCase(
 func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectInput) (*RedirectOutput, error) {
 	// 1. 優先查 Redis 快取（降低 redirect 延遲，這是效能關鍵路徑）
 	link, err := uc.cache.GetShortLink(ctx, input.Code)
+
+	// 快取穿透防護：此 code 已被標記不存在，直接拒絕不查 DB
+	if errors.Is(err, shortlink.ErrNullCache) {
+		return nil, fmt.Errorf("短碼不存在: %s", input.Code)
+	}
 	if err != nil {
-		// 快取讀取失敗不中斷，fallback 到 DB
+		// 其他快取讀取錯誤不中斷，fallback 到 DB
 		link = nil
 	}
 
-	// 2. Cache miss → 查 PostgreSQL
+	// 2. Cache miss → 用 singleflight 查 PostgreSQL
+	// 防止快取擊穿：同一 code 的並發 miss 只觸發一次 DB 查詢，其餘等待共享結果
 	if link == nil {
-		link, err = uc.linkRepo.FindByCode(ctx, input.Code)
-		if err != nil {
-			return nil, fmt.Errorf("查詢短網址失敗: %w", err)
+		val, sfErr, _ := uc.sfGroup.Do(input.Code, func() (any, error) {
+			l, e := uc.linkRepo.FindByCode(ctx, input.Code)
+			if e != nil {
+				return nil, fmt.Errorf("查詢短網址失敗: %w", e)
+			}
+			if l == nil {
+				// 短碼不存在，寫入 null cache 防止後續請求重複查 DB
+				_ = uc.cache.SetNullCache(ctx, input.Code)
+				return nil, fmt.Errorf("短碼不存在: %s", input.Code)
+			}
+			// 回填快取，加速後續請求
+			_ = uc.cache.SetShortLink(ctx, l)
+			return l, nil
+		})
+		if sfErr != nil {
+			return nil, sfErr
 		}
-		if link == nil {
-			return nil, fmt.Errorf("短碼不存在: %s", input.Code)
-		}
-		// 回填快取，加速後續請求
-		_ = uc.cache.SetShortLink(ctx, link)
+		link = val.(*shortlink.ShortLink)
 	}
 
 	// 3. 檢查是否過期
