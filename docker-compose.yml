@@ -1,10 +1,13 @@
-version: "3.9"
+version: "2.1"
 
 services:
   # ── PostgreSQL 18.3 ────────────────────────────────────────────────────────
   postgres:
     image: postgres:18.3
     container_name: shortlink-postgres
+    # PostgreSQL 18 在 kernel 4.9 的 Docker VM 需要放寬 seccomp 限制
+    security_opt:
+      - seccomp:unconfined
     environment:
       POSTGRES_USER:     postgres
       POSTGRES_PASSWORD: postgres
@@ -12,7 +15,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
