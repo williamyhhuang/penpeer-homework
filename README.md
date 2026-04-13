@@ -71,7 +71,8 @@ docker-compose up --build
 
 | 服務 | URL |
 |------|-----|
-| 前端 | http://localhost:3000 |
+| 前端（建立短網址） | http://localhost:3000 |
+| Analytics Dashboard | http://localhost:3000/analytics/{code} |
 | 後端 API | http://localhost:8080 |
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
