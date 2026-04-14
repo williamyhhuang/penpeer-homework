@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/penpeer/shortlink/application/usecase"
 	bloomfilter "github.com/penpeer/shortlink/infrastructure/bloom"
 	"github.com/penpeer/shortlink/infrastructure/postgres"
@@ -22,11 +20,6 @@ import (
 	"github.com/penpeer/shortlink/interfaces/http/handler"
 	"github.com/penpeer/shortlink/interfaces/http/middleware"
 )
-
-// embed 路徑相對於本檔案所在目錄（cmd/）
-//
-//go:embed migrations/*.sql
-var migrationFS embed.FS
 
 func main() {
 	// ── 讀取環境變數 ──────────────────────────────────────────────────────
@@ -57,8 +50,8 @@ func main() {
 	}
 	defer db.Close()
 
-	// 執行 DB migration（讀取內嵌 SQL 自動建表）
-	if err := runMigrations(db, migrationFS); err != nil {
+	// 執行 DB migration（由 infrastructure/postgres 層負責，符合 DDD 架構）
+	if err := postgres.RunMigrations(db); err != nil {
 		log.Fatalf("DB migration 失敗: %v", err)
 	}
 
@@ -127,27 +120,6 @@ func main() {
 	log.Println("伺服器已關閉")
 }
 
-// runMigrations 讀取內嵌的 SQL 檔案並依序執行
-func runMigrations(db *sqlx.DB, fs embed.FS) error {
-	entries, err := fs.ReadDir("migrations")
-	if err != nil {
-		return fmt.Errorf("讀取 migration 目錄失敗: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		sqlBytes, err := fs.ReadFile("migrations/" + entry.Name())
-		if err != nil {
-			return fmt.Errorf("讀取 %s 失敗: %w", entry.Name(), err)
-		}
-		if _, err := db.Exec(string(sqlBytes)); err != nil {
-			return fmt.Errorf("執行 %s 失敗: %w", entry.Name(), err)
-		}
-		log.Printf("Migration 執行完成: %s", entry.Name())
-	}
-	return nil
-}
 
 func getEnv(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
