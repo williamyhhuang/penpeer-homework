@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/penpeer/shortlink/domain/click"
 	"github.com/penpeer/shortlink/domain/referral"
@@ -28,6 +29,9 @@ func (m *mockShortLinkRepo) Save(_ context.Context, link *shortlink.ShortLink) e
 
 func (m *mockShortLinkRepo) FindByCode(_ context.Context, code string) (*shortlink.ShortLink, error) {
 	m.findCalls.Add(1)
+	// 模擬 DB 查詢延遲，確保 singleflight 測試中並發請求能被有效合併
+	// 若無延遲，mock 瞬間返回，後續 goroutine 可能在 singleflight 完成後才到達，導致計數超過 1
+	time.Sleep(10 * time.Millisecond)
 	return m.store[code], nil
 }
 

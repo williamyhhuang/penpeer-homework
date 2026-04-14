@@ -27,6 +27,7 @@ func (h *RedirectHandler) Redirect(c *gin.Context) {
 		ReferralCode: c.Query("ref"),
 		CFIPCountry:  c.GetHeader("CF-IPCountry"),
 		XCountry:     c.GetHeader("X-Country"),
+		ClientIP:     c.ClientIP(),
 	})
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})

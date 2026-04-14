@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/penpeer/shortlink/application/geoip"
 	"github.com/penpeer/shortlink/application/uadetect"
 	"github.com/penpeer/shortlink/domain/click"
 	"github.com/penpeer/shortlink/domain/shortlink"
@@ -30,6 +31,7 @@ type RedirectInput struct {
 	ReferralCode string // 從 ?ref= query param 取得
 	CFIPCountry  string // Cloudflare header
 	XCountry     string // 其他 CDN header
+	ClientIP     string // 用戶端真實 IP（CDN Header 缺席時的 GeoIP fallback）
 }
 
 // RedirectOutput redirect 決策結果
@@ -115,7 +117,7 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 	region := uadetect.ExtractRegion(input.CFIPCountry, input.XCountry)
 
 	// 5. 非同步寫入 ClickEvent（不阻塞 redirect 回應）
-	go uc.asyncSaveClick(link.Code, detected, region, input.ReferralCode)
+	go uc.asyncSaveClick(link.Code, detected, region, input.ReferralCode, input.ClientIP)
 
 	// 6. 社群 Bot → 回傳含 OG meta tags 的 HTML，讓平台顯示預覽
 	if detected.IsBot {
@@ -128,13 +130,21 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 }
 
 // asyncSaveClick 在獨立 goroutine 中寫入點擊事件，避免阻塞 redirect
+// 當 CDN Header 沒有帶 region 時（本機開發 / 非 Cloudflare 環境），以 clientIP 呼叫
+// ip-api.com GeoIP 取得國碼作為 fallback，確保地區分布統計有資料
 func (uc *RedirectShortLinkUseCase) asyncSaveClick(
 	shortLinkCode string,
 	detected uadetect.DetectResult,
-	region, referralCode string,
+	region, referralCode, clientIP string,
 ) {
 	// 使用獨立 context，避免 HTTP request context 被取消後 goroutine 無法寫入
 	ctx := context.Background()
+
+	// CDN Header 未帶地區（非 Cloudflare / 本機環境），嘗試用 IP 查詢國碼
+	if region == "" && clientIP != "" {
+		region = geoip.LookupCountry(ctx, clientIP)
+	}
+
 	event := &click.ClickEvent{
 		ShortLinkCode: shortLinkCode,
 		ClickedAt:     time.Now(),
