@@ -25,7 +25,8 @@ type OGScraper struct {
 func NewOGScraper() *OGScraper {
 	return &OGScraper{
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			// OG 抓取為非同步背景工作，縮短 timeout 避免 goroutine 長時間洩漏
+			Timeout: 5 * time.Second,
 			// 不追蹤重新導向超過 3 次，避免無限循環
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 3 {
@@ -62,29 +63,48 @@ func (s *OGScraper) Scrape(ctx context.Context, targetURL string) (*OGData, erro
 }
 
 // parseOGFromHTML 解析 HTML 的 <meta property="og:*"> 標籤
+// 優化：利用 tokenizer 串流讀取，遇到 </head> 立即停止，不讀取整個 body
 func parseOGFromHTML(resp *http.Response) (*OGData, error) {
-	doc, err := html.Parse(resp.Body)
-	if err != nil {
-		return &OGData{}, fmt.Errorf("解析 HTML 失敗: %w", err)
-	}
-
 	og := &OGData{}
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		// 只需要掃描 <head> 內的 <meta> 標籤，找到所有 OG 資料後即可停止
-		if n.Type == html.ElementNode && n.Data == "meta" {
+	z := html.NewTokenizer(resp.Body)
+
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			// EOF 或讀取錯誤，直接回傳已蒐集的資料
+			return og, nil
+
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			// 遇到 </head> 代表 meta 標籤已全部出現，提前結束掃描
+			if strings.EqualFold(string(name), "head") {
+				return og, nil
+			}
+
+		case html.SelfClosingTagToken, html.StartTagToken:
+			name, hasAttr := z.TagName()
+			if !hasAttr || !strings.EqualFold(string(name), "meta") {
+				continue
+			}
 			var property, content string
-			for _, attr := range n.Attr {
-				switch strings.ToLower(attr.Key) {
+			for {
+				key, val, more := z.TagAttr()
+				k := strings.ToLower(string(key))
+				v := string(val)
+				switch k {
 				case "property":
-					property = strings.ToLower(attr.Val)
+					property = strings.ToLower(v)
 				case "name":
 					// 相容 name="description" 的寫法
 					if property == "" {
-						property = strings.ToLower(attr.Val)
+						property = strings.ToLower(v)
 					}
 				case "content":
-					content = attr.Val
+					content = v
+				}
+				if !more {
+					break
 				}
 			}
 			switch property {
@@ -101,11 +121,5 @@ func parseOGFromHTML(resp *http.Response) (*OGData, error) {
 				}
 			}
 		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
 	}
-	walk(doc)
-
-	return og, nil
 }

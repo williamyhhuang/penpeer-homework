@@ -54,6 +54,18 @@ func (r *ShortLinkRepo) FindByCode(ctx context.Context, code string) (*shortlink
 	return toShortLinkDomain(&m), nil
 }
 
+// UpdateOG 僅更新指定短碼的 OG 欄位，供非同步 scraper 完成後回寫
+func (r *ShortLinkRepo) UpdateOG(ctx context.Context, code, title, description, image string) error {
+	return r.db.WithContext(ctx).
+		Model(&models.ShortLinkModel{}).
+		Where("code = ?", code).
+		Updates(map[string]interface{}{
+			"og_title":       title,
+			"og_description": description,
+			"og_image":       image,
+		}).Error
+}
+
 // ── 轉換函式（infrastructure 層私有，嚴格隔離 domain entity）──────────────────
 
 func toShortLinkModel(link *shortlink.ShortLink) models.ShortLinkModel {

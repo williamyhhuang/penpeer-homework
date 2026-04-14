@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"time"
 
@@ -66,31 +67,25 @@ func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShort
 		return nil, fmt.Errorf("產生短碼失敗: %w", err)
 	}
 
-	// 3. 抓取 OG 資料（建立時同步抓取，Bot 來時直接讀 DB，不重複抓）
-	ogData, err := uc.scraper.Scrape(ctx, input.URL)
-	if err != nil {
-		// OG 抓取失敗不中斷主流程，使用空值
-		ogData = &scraper.OGData{}
-	}
-
-	// 4. 建立短網址 Domain 物件
+	// 3. 先建立短網址（OG 欄位暫為空），立刻持久化並回應，不等外部 HTTP 抓取
 	link := &shortlink.ShortLink{
-		Code:          code,
-		OriginalURL:   input.URL,
-		OGTitle:       ogData.Title,
-		OGDescription: ogData.Description,
-		OGImage:       ogData.Image,
-		CreatedAt:     time.Now(),
+		Code:        code,
+		OriginalURL: input.URL,
+		CreatedAt:   time.Now(),
 	}
 
-	// 5. 存入 PostgreSQL（持久化）
+	// 4. 存入 PostgreSQL（持久化）
 	if err := uc.linkRepo.Save(ctx, link); err != nil {
 		return nil, fmt.Errorf("儲存短網址失敗: %w", err)
 	}
 
-	// 6. 寫入 Redis 快取（降低後續 redirect 的 DB 查詢）
+	// 5. 寫入 Redis 快取（降低後續 redirect 的 DB 查詢）
 	// 快取失敗不中斷主流程，只影響效能
 	_ = uc.cache.SetShortLink(ctx, link)
+
+	// 6. 非同步抓取 OG 資料：不阻塞當前請求，背景完成後回寫 DB
+	// 設計理由：OG 資料只用於 preview（Bot 訪問），不影響短網址轉導核心功能
+	go uc.fetchAndUpdateOG(code, input.URL)
 
 	// 7. 更新 bloom filter，確保後續 redirect 不會因 filter 未知此 code 而誤判為不存在
 	if uc.bloom != nil {
@@ -115,6 +110,22 @@ func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShort
 	}
 
 	return out, nil
+}
+
+// fetchAndUpdateOG 在背景 goroutine 中抓取 OG 資料並回寫 DB
+// 使用獨立的 context（不繼承 request context），避免 HTTP 請求結束後 context 被取消
+func (uc *CreateShortLinkUseCase) fetchAndUpdateOG(code, targetURL string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ogData, err := uc.scraper.Scrape(ctx, targetURL)
+	if err != nil {
+		log.Printf("[OG] 抓取失敗 code=%s url=%s err=%v", code, targetURL, err)
+		return
+	}
+	if err := uc.linkRepo.UpdateOG(ctx, code, ogData.Title, ogData.Description, ogData.Image); err != nil {
+		log.Printf("[OG] 回寫 DB 失敗 code=%s err=%v", code, err)
+	}
 }
 
 // validateURL 驗證 URL 必須為有效的 http/https 格式

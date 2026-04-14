@@ -39,6 +39,15 @@ func (m *mockShortLinkRepo) FindAllCodes(_ context.Context) ([]string, error) {
 	return codes, nil
 }
 
+func (m *mockShortLinkRepo) UpdateOG(_ context.Context, code, title, description, image string) error {
+	if link, ok := m.store[code]; ok {
+		link.OGTitle = title
+		link.OGDescription = description
+		link.OGImage = image
+	}
+	return nil
+}
+
 // mockReferralRepo 模擬 referral.Repository
 type mockReferralRepo struct {
 	store map[string]*referral.ReferralCode
