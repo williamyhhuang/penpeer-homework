@@ -120,11 +120,9 @@ func main() {
 	log.Println("伺服器已關閉")
 }
 
-
 func getEnv(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return defaultVal
 }
-
