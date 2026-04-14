@@ -97,7 +97,7 @@ func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShort
 	// 8. 若有推薦碼需求，同時建立推薦碼
 	if input.ReferralOwnerID != "" {
 		refCode := &referral.ReferralCode{
-			Code:          fmt.Sprintf("%s-%s", input.ReferralOwnerID, code),
+			Code:          input.ReferralOwnerID,
 			OwnerID:       input.ReferralOwnerID,
 			ShortLinkCode: code,
 			CreatedAt:     time.Now(),
