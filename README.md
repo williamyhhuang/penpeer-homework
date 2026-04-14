@@ -4,15 +4,20 @@
 
 ## 技術棧
 
-| 層級 | 技術 |
-|------|------|
-| 後端語言 | Go 1.21 |
-| API 框架 | Gin 1.10 |
-| 資料庫 | PostgreSQL 18.3 |
-| 快取 | Redis 7.2.7 |
-| 前端語言 | TypeScript 6.0 |
-| 前端框架 | React 18.2 |
-| 容器化 | Docker / Docker Compose |
+| 層級 | 技術 | 版本 |
+|------|------|------|
+| 後端語言 | Go | 1.23 |
+| API 框架 | Gin | 1.10.1 |
+| ORM | GORM | 1.25.10 |
+| GORM PG Driver | gorm.io/driver/postgres | 1.5.9 |
+| PG 驅動 | pgx | v5.5.5 |
+| 資料庫 | PostgreSQL | 18.0 |
+| 快取 | Redis | 7.2.7 |
+| Redis 客戶端 | go-redis/v9 | 9.7.0 |
+| Bloom Filter | bits-and-blooms/bloom/v3 | 3.7.1 |
+| 前端語言 | TypeScript | 6.0 |
+| 前端框架 | React | 18.2 |
+| 容器化 | Docker / Docker Compose | — |
 
 ## 專案架構
 
@@ -20,29 +25,81 @@
 
 ```
 src/
-├── backend/                     # Go 後端
+├── backend/                              # Go 後端
 │   ├── cmd/
-│   │   ├── main.go              # 進入點、DI 組裝、Graceful Shutdown
-│   │   └── migrations/          # SQL migration 檔（embed 至二進位）
-│   ├── domain/                  # 領域層（純業務邏輯，零外部依賴）
-│   │   ├── shortlink/           # ShortLink 聚合根
-│   │   ├── click/               # ClickEvent 聚合根
-│   │   └── referral/            # ReferralCode 聚合根
-│   ├── application/             # 應用層（Use Cases）
-│   │   ├── usecase/             # 四個核心 Use Case
-│   │   └── codegen/ uadetect/   # 短碼產生 / UA 偵測工具
-│   ├── infrastructure/          # 基礎設施層（外部適配器）
-│   │   ├── postgres/            # PostgreSQL repo 實作
-│   │   ├── redis/               # Redis 快取實作
-│   │   └── scraper/             # OG meta 抓取器
+│   │   └── main.go                       # 進入點、DI 組裝、Graceful Shutdown
+│   │
+│   ├── domain/                           # 領域層（純業務邏輯，零外部依賴）
+│   │   ├── shortlink/
+│   │   │   ├── entity.go                 # ShortLink 聚合根實體
+│   │   │   ├── repository.go             # Repository 介面定義
+│   │   │   └── errors.go                 # ErrNullCache 等領域錯誤
+│   │   ├── click/
+│   │   │   ├── entity.go                 # ClickEvent 聚合根實體
+│   │   │   └── repository.go             # Repository 介面定義
+│   │   └── referral/
+│   │       ├── entity.go                 # ReferralCode 聚合根實體
+│   │       └── repository.go             # Repository 介面定義
+│   │
+│   ├── application/                      # 應用層（Use Cases）
+│   │   ├── usecase/
+│   │   │   ├── create_short_link.go      # 建立短網址（含 OG 抓取）
+│   │   │   ├── redirect_short_link.go    # 短網址跳轉（含 singleflight）
+│   │   │   ├── get_preview.go            # 取得 OG 預覽資料
+│   │   │   ├── get_analytics.go          # 點擊統計與推薦歸因
+│   │   │   ├── get_ranking.go            # 點擊數排行榜
+│   │   │   ├── bloom.go                  # Bloom Filter 前置過濾
+│   │   │   ├── mock_test.go              # Repository mock
+│   │   │   ├── create_short_link_test.go
+│   │   │   ├── redirect_short_link_test.go
+│   │   │   ├── get_preview_test.go
+│   │   │   ├── get_analytics_test.go
+│   │   │   └── get_ranking_test.go
+│   │   ├── codegen/
+│   │   │   └── codegen.go                # 隨機短碼產生器（Base62）
+│   │   └── uadetect/
+│   │       └── uadetect.go               # User-Agent Bot 偵測
+│   │
+│   ├── infrastructure/                   # 基礎設施層（外部適配器）
+│   │   ├── postgres/
+│   │   │   ├── models/
+│   │   │   │   ├── shortlink_model.go    # GORM ShortLink ORM 模型
+│   │   │   │   ├── click_model.go        # GORM ClickEvent ORM 模型
+│   │   │   │   └── referral_model.go     # GORM ReferralCode ORM 模型
+│   │   │   ├── db.go                     # GORM 連線池初始化
+│   │   │   ├── migrator.go               # Auto-migrate（GORM）
+│   │   │   ├── shortlink_repo.go         # ShortLink Repository 實作
+│   │   │   ├── click_repo.go             # ClickEvent Repository 實作
+│   │   │   └── referral_repo.go          # ReferralCode Repository 實作
+│   │   ├── redis/
+│   │   │   └── cache.go                  # Redis 快取（含 jitter TTL、null cache）
+│   │   ├── bloom/
+│   │   │   └── filter.go                 # Bloom Filter（bits-and-blooms）
+│   │   └── scraper/
+│   │       └── og_scraper.go             # OG meta tag 抓取器
+│   │
 │   └── interfaces/
-│       └── http/                # Gin Router + Handler（HTTP 適配器）
-└── frontend/                    # React 前端
-    ├── src/
-    │   ├── api/                 # API client
-    │   ├── components/          # UI 元件
-    │   └── types/               # TypeScript 型別定義
-    └── ...
+│       └── http/
+│           ├── router.go                 # Gin 路由與中介層組裝
+│           ├── handler/
+│           │   ├── link_handler.go       # 建立 / 預覽 / 統計 / 排行 Handler
+│           │   └── redirect_handler.go   # 跳轉 / Bot OG HTML Handler
+│           └── middleware/
+│               └── rate_limit.go         # 請求速率限制
+│
+└── frontend/                             # React 前端
+    └── src/
+        ├── App.tsx                       # 路由根元件
+        ├── main.tsx                      # 應用進入點
+        ├── api/
+        │   └── client.ts                 # Axios API 客戶端封裝
+        ├── components/
+        │   ├── CreateLinkForm.tsx         # 建立短網址表單
+        │   ├── LinkResult.tsx             # 短網址建立結果顯示
+        │   ├── AnalyticsDashboard.tsx     # 單碼點擊統計儀表板
+        │   └── RankingDashboard.tsx       # 全域排行榜儀表板
+        └── types/
+            └── index.ts                  # TypeScript 型別定義
 ```
 
 ## API 端點
