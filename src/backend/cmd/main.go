@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/penpeer/shortlink/application/usecase"
+	"github.com/penpeer/shortlink/config"
 	bloomfilter "github.com/penpeer/shortlink/infrastructure/bloom"
 	"github.com/penpeer/shortlink/infrastructure/postgres"
 	rediscache "github.com/penpeer/shortlink/infrastructure/redis"
@@ -22,7 +22,13 @@ import (
 )
 
 func main() {
-	// ── 讀取環境變數 ──────────────────────────────────────────────────────
+	// ── 載入非機敏設定（config/app.yaml，內嵌於 binary）────────────────────
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("載入應用程式設定失敗: %v", err)
+	}
+
+	// ── 讀取機敏環境變數（.env / Docker 環境注入）────────────────────────
 	dbHost     := getEnv("DB_HOST",     "localhost")
 	dbPort     := getEnv("DB_PORT",     "5432")
 	dbUser     := getEnv("DB_USER",     "postgres")
@@ -31,17 +37,6 @@ func main() {
 	redisHost  := getEnv("REDIS_HOST",  "localhost")
 	redisPort  := getEnv("REDIS_PORT",  "6379")
 	serverPort := getEnv("SERVER_PORT", "8080")
-
-	// null cache 水位管控設定
-	nullCacheMaxKeys   := getEnvInt("NULL_CACHE_MAX_KEYS",   10_000)
-	nullCacheEvictCnt  := getEnvInt("NULL_CACHE_EVICT_COUNT", 1_000)
-
-	// rate limit 設定（per-IP，redirect 路徑）
-	rateLimitRPS   := getEnvInt("RATE_LIMIT_RPS",   30)
-	rateLimitBurst := getEnvInt("RATE_LIMIT_BURST",  60)
-
-	// bloom filter 設定
-	bloomCapacity := getEnvInt("BLOOM_CAPACITY", 1_000_000)
 
 	// ── PostgreSQL ────────────────────────────────────────────────────────
 	db, err := postgres.NewDB(dbHost, dbPort, dbUser, dbPassword, dbName)
@@ -62,8 +57,8 @@ func main() {
 
 	// ── Redis ─────────────────────────────────────────────────────────────
 	cache := rediscache.NewCache(redisHost, redisPort, "", 0, rediscache.NullCacheConfig{
-		MaxKeys:    int64(nullCacheMaxKeys),
-		EvictCount: int64(nullCacheEvictCnt),
+		MaxKeys:    cfg.NullCache.MaxKeys,
+		EvictCount: cfg.NullCache.EvictCount,
 	})
 	if err := cache.Ping(context.Background()); err != nil {
 		log.Fatalf("無法連線 Redis: %v", err)
@@ -77,7 +72,7 @@ func main() {
 
 	// ── Bloom Filter 初始化（啟動時從 DB 載入所有短碼）──────────────────────
 	// 誤判率 1%：最多 1% 的不存在 code 被誤判為存在（仍需查 Redis/DB 確認）
-	bloom := bloomfilter.New(uint(bloomCapacity), 0.01)
+	bloom := bloomfilter.New(uint(cfg.Bloom.Capacity), 0.01)
 	if codes, err := linkRepo.FindAllCodes(context.Background()); err != nil {
 		log.Printf("警告：bloom filter 初始化失敗（%v），退化為無 bloom filter 模式", err)
 	} else {
@@ -97,7 +92,7 @@ func main() {
 	redirectHandler := handler.NewRedirectHandler(redirectUC)
 
 	// ── 啟動 HTTP 伺服器 ──────────────────────────────────────────────────
-	rlCfg  := middleware.RateLimitConfig{RPS: rateLimitRPS, Burst: rateLimitBurst}
+	rlCfg  := middleware.RateLimitConfig{RPS: cfg.RateLimit.RPS, Burst: cfg.RateLimit.Burst}
 	router := httpRouter.NewRouter(linkHandler, redirectHandler, rlCfg)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", serverPort),
@@ -133,11 +128,3 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
-func getEnvInt(key string, defaultVal int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return defaultVal
-}
