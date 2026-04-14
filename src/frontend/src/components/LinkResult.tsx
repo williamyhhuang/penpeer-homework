@@ -7,7 +7,10 @@ interface Props {
 }
 
 export function LinkResult({ link, onViewAnalytics }: Props) {
-  const shortURL = `${window.location.origin}/${link.code}`;
+  // 若有推薦碼，附加 ?ref= 使點擊事件能歸因到推薦者
+  const shortURL = link.referral_code
+    ? `${window.location.origin}/${link.code}?ref=${link.referral_code}`
+    : `${window.location.origin}/${link.code}`;
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
