@@ -19,6 +19,62 @@
 | 前端框架 | React | 18.2 |
 | 容器化 | Docker / Docker Compose | — |
 
+## 系統架構（Docker Compose）
+
+```
+外部流量
+    │
+    │  :3000
+    ▼
+┌─────────────────────┐
+│  Frontend           │  React + Nginx (shortlink-frontend)
+│  :3000 → :80        │
+└──────────┬──────────┘
+           │ proxy_pass /api  →  shortlink-lb:8080
+           │ :8080
+           ▼
+┌─────────────────────┐
+│  Load Balancer      │  Nginx Alpine (shortlink-lb)
+│  :8080              │  Round-Robin
+└──┬────────┬─────────┘
+   │        │  … 可用 --scale backend=N 水平擴充
+   ▼        ▼
+┌────────┐ ┌────────┐
+│Backend │ │Backend │  Go + Gin (可多副本)
+│(Go/Gin)│ │(Go/Gin)│
+└───┬──┬─┘ └───┬──┬─┘
+    │  │       │  │
+    │  └───────┘  │
+    │  (共用同一層基礎設施)
+    ▼             ▼
+┌──────────┐  ┌──────────┐
+│PostgreSQL│  │  Redis   │  持久化 / 快取
+│ :5432    │  │  :6379   │
+└──────────┘  └──────────┘
+     ▲
+     │
+┌────┴─────┐
+│ Cleanup  │  背景清理 Worker（獨立 container）
+│ Worker   │
+└──────────┘
+```
+
+### 各服務說明
+
+| Container | 映像檔 | 對外 Port | 說明 |
+|-----------|--------|-----------|------|
+| `shortlink-frontend` | React + Nginx (自建) | 3000 | 靜態資源 + 反向代理 API |
+| `shortlink-lb` | nginx:alpine | 8080 | Round-Robin 負載均衡，分流到 backend 副本 |
+| `backend` × N | Go + Gin (自建) | — | API 伺服器，`--scale backend=N` 水平擴充 |
+| `shortlink-postgres` | postgres:18.3 | 5432 | 主資料庫 |
+| `shortlink-redis` | redis:7.2.7-alpine | 6379 | 短網址快取、null cache、Bloom Filter |
+| `cleanup` | Go (自建) | — | 定期清理過期資料的背景 Worker |
+
+> **水平擴充**：`docker-compose up --build --scale backend=3`  
+> Load Balancer 會自動將流量均分至三個 backend 副本。
+
+---
+
 ## 專案架構
 
 採用 **DDD + Hexagonal Architecture**，前後端完全分離。
