@@ -47,3 +47,4 @@ implementing features and update documentation after making changes.
 - Always git commit after implementing codes
 - Always implement unit tests for codes
 - Always run unit tests after implementing codes, if unit tests failed, fix it
+- every config params added to .env file must be added to .env.example file
