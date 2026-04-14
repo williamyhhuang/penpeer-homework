@@ -3,36 +3,35 @@ package postgres
 import (
 	"context"
 
-	"github.com/jmoiron/sqlx"
+	"gorm.io/gorm"
+
 	"github.com/penpeer/shortlink/domain/click"
+	"github.com/penpeer/shortlink/infrastructure/postgres/models"
 )
 
 // ClickRepo 實作 domain/click.Repository
 type ClickRepo struct {
-	db *sqlx.DB
+	db *gorm.DB
 }
 
-func NewClickRepo(db *sqlx.DB) *ClickRepo {
+func NewClickRepo(db *gorm.DB) *ClickRepo {
 	return &ClickRepo{db: db}
 }
 
 func (r *ClickRepo) Save(ctx context.Context, event *click.ClickEvent) error {
-	query := `
-		INSERT INTO click_events (short_link_code, clicked_at, platform, region, device_type, referral_code)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`
-	_, err := r.db.ExecContext(ctx, query,
-		event.ShortLinkCode,
-		event.ClickedAt,
-		string(event.Platform),
-		event.Region,
-		string(event.DeviceType),
-		event.ReferralCode,
-	)
-	return err
+	m := models.ClickEventModel{
+		ShortLinkCode: event.ShortLinkCode,
+		ClickedAt:     event.ClickedAt,
+		Platform:      string(event.Platform),
+		Region:        event.Region,
+		DeviceType:    string(event.DeviceType),
+		ReferralCode:  event.ReferralCode,
+	}
+	return r.db.WithContext(ctx).Create(&m).Error
 }
 
-// GetStatsByCode 彙整指定短碼的點擊統計，使用單一 SQL 避免多次來回
+// GetStatsByCode 彙整指定短碼的點擊統計
+// COUNT 用 GORM API，GROUP BY 保留 Raw SQL：語意複雜，Raw 比 GORM 鏈式語法更易讀
 func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*click.ClickStats, error) {
 	stats := &click.ClickStats{
 		ByPlatform:   make(map[click.Platform]int64),
@@ -42,21 +41,17 @@ func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*
 	}
 
 	// 總點擊數
-	err := r.db.GetContext(ctx, &stats.TotalClicks,
-		"SELECT COUNT(*) FROM click_events WHERE short_link_code = $1", shortLinkCode)
-	if err != nil {
+	if err := r.db.WithContext(ctx).Model(&models.ClickEventModel{}).
+		Where("short_link_code = ?", shortLinkCode).Count(&stats.TotalClicks).Error; err != nil {
 		return nil, err
 	}
 
 	// 按平台分組
-	var platformRows []struct {
-		Platform string `db:"platform"`
-		Count    int64  `db:"count"`
-	}
-	err = r.db.SelectContext(ctx, &platformRows,
-		"SELECT platform, COUNT(*) as count FROM click_events WHERE short_link_code = $1 GROUP BY platform",
-		shortLinkCode)
-	if err != nil {
+	var platformRows []models.PlatformCount
+	if err := r.db.WithContext(ctx).Raw(
+		"SELECT platform, COUNT(*) as count FROM click_events WHERE short_link_code = ? GROUP BY platform",
+		shortLinkCode,
+	).Scan(&platformRows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range platformRows {
@@ -64,14 +59,11 @@ func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*
 	}
 
 	// 按裝置分組
-	var deviceRows []struct {
-		DeviceType string `db:"device_type"`
-		Count      int64  `db:"count"`
-	}
-	err = r.db.SelectContext(ctx, &deviceRows,
-		"SELECT device_type, COUNT(*) as count FROM click_events WHERE short_link_code = $1 GROUP BY device_type",
-		shortLinkCode)
-	if err != nil {
+	var deviceRows []models.DeviceCount
+	if err := r.db.WithContext(ctx).Raw(
+		"SELECT device_type, COUNT(*) as count FROM click_events WHERE short_link_code = ? GROUP BY device_type",
+		shortLinkCode,
+	).Scan(&deviceRows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range deviceRows {
@@ -79,14 +71,11 @@ func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*
 	}
 
 	// 按地區分組
-	var regionRows []struct {
-		Region string `db:"region"`
-		Count  int64  `db:"count"`
-	}
-	err = r.db.SelectContext(ctx, &regionRows,
-		"SELECT region, COUNT(*) as count FROM click_events WHERE short_link_code = $1 GROUP BY region",
-		shortLinkCode)
-	if err != nil {
+	var regionRows []models.RegionCount
+	if err := r.db.WithContext(ctx).Raw(
+		"SELECT region, COUNT(*) as count FROM click_events WHERE short_link_code = ? GROUP BY region",
+		shortLinkCode,
+	).Scan(&regionRows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range regionRows {
@@ -96,14 +85,11 @@ func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*
 	}
 
 	// 按推薦碼分組
-	var referralRows []struct {
-		ReferralCode string `db:"referral_code"`
-		Count        int64  `db:"count"`
-	}
-	err = r.db.SelectContext(ctx, &referralRows,
-		"SELECT referral_code, COUNT(*) as count FROM click_events WHERE short_link_code = $1 AND referral_code != '' GROUP BY referral_code",
-		shortLinkCode)
-	if err != nil {
+	var referralRows []models.ReferralCount
+	if err := r.db.WithContext(ctx).Raw(
+		"SELECT referral_code, COUNT(*) as count FROM click_events WHERE short_link_code = ? AND referral_code != '' GROUP BY referral_code",
+		shortLinkCode,
+	).Scan(&referralRows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range referralRows {
@@ -114,20 +100,16 @@ func (r *ClickRepo) GetStatsByCode(ctx context.Context, shortLinkCode string) (*
 }
 
 // GetRanking 查詢所有短碼的點擊總數並依降冪排序
-// LEFT JOIN 確保 0 點擊的短碼也出現在排行榜
+// LEFT JOIN 確保 0 點擊的短碼也出現在排行榜，保留 Raw SQL 以維持查詢語意清晰
 func (r *ClickRepo) GetRanking(ctx context.Context) ([]click.CodeRanking, error) {
-	var rows []struct {
-		Code        string `db:"code"`
-		OriginalURL string `db:"original_url"`
-		TotalClicks int64  `db:"total_clicks"`
-	}
-	err := r.db.SelectContext(ctx, &rows, `
+	var rows []models.RankingRow
+	err := r.db.WithContext(ctx).Raw(`
 		SELECT sl.code, sl.original_url, COUNT(ce.id) AS total_clicks
 		FROM short_links sl
 		LEFT JOIN click_events ce ON sl.code = ce.short_link_code
 		GROUP BY sl.code, sl.original_url
 		ORDER BY total_clicks DESC, sl.code ASC
-	`)
+	`).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

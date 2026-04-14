@@ -48,7 +48,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("無法連線 PostgreSQL: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		// *gorm.DB 底層是 *sql.DB，需透過 db.DB() 取得後才能 Close
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	}()
 
 	// 執行 DB migration（由 infrastructure/postgres 層負責，符合 DDD 架構）
 	if err := postgres.RunMigrations(db); err != nil {
