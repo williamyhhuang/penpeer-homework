@@ -12,3 +12,7 @@ rate_limit:
 
 bloom:
   capacity: 1000000  # 預期短碼最大數量（影響記憶體用量與誤判率）
+
+cleanup:
+  click_retention_days: 90    # 點擊事件保留天數，超過後封存至 click_events_archive
+  interval_hours: 24          # 封存任務執行間隔（小時）

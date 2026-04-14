@@ -34,3 +34,5 @@ src/frontend/coverage/
 # ── Docker 本地 volume 備份 ───────────────────────────────────────────────────
 *.tar
 *.dump
+src/backend/cleanup
+src/backend/server

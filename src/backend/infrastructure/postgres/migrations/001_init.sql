@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS short_links (
     valid_flag      BOOLEAN       NOT NULL DEFAULT TRUE
 );
 
+-- 冪等補欄：若從舊版升上來（表已存在但缺少 valid_flag），補上欄位
+ALTER TABLE short_links ADD COLUMN IF NOT EXISTS valid_flag BOOLEAN NOT NULL DEFAULT TRUE;
+
 COMMENT ON TABLE  short_links                 IS '短網址主表：儲存短碼、原始網址與 Open Graph 預覽資料';
 COMMENT ON COLUMN short_links.code            IS '短網址唯一識別碼（主鍵），用於 redirect 路徑查詢，例如 /gh001';
 COMMENT ON COLUMN short_links.original_url    IS '原始長網址，使用者點擊後 redirect 至此';
@@ -36,6 +39,9 @@ CREATE TABLE IF NOT EXISTS referral_codes (
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     valid_flag      BOOLEAN       NOT NULL DEFAULT TRUE
 );
+
+-- 冪等補欄：若從舊版升上來缺少 valid_flag，補上欄位
+ALTER TABLE referral_codes ADD COLUMN IF NOT EXISTS valid_flag BOOLEAN NOT NULL DEFAULT TRUE;
 
 COMMENT ON TABLE  referral_codes                    IS '推薦碼表：記錄行銷人員（KOL / 業務）的推薦碼與對應短網址';
 COMMENT ON COLUMN referral_codes.code               IS '推薦碼唯一識別碼（主鍵），附加於短網址後供來源追蹤，例如 ?ref=REF_GH_KOL1';
@@ -241,6 +247,7 @@ IF NOT EXISTS (SELECT 1 FROM click_events LIMIT 1) THEN
     (short_link_code, clicked_at, platform, region, device_type, referral_code)
   SELECT
     -- 熱門度加權：重複出現次數越多代表流量越高
+    -- 陣列共 30 個元素（索引 1-30），乘以 29 後四捨五入最大得 29，加 1 = 30，不越界
     (ARRAY[
       'gh001','gh001','gh001','gh001',
       'yt001','yt001','yt001','yt001',
@@ -251,7 +258,7 @@ IF NOT EXISTS (SELECT 1 FROM click_events LIMIT 1) THEN
       'sp001','sp001',
       'nf001','nf001',
       'li001','go001','am001','ms001','ap001','wk001','rd001'
-    ])[1 + (random() * 30)::int],
+    ])[1 + (random() * 29)::int],
 
     -- 時間隨機分布在最近 30 天
     NOW() - (random() * INTERVAL '30 days'),

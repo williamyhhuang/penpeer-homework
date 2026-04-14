@@ -5,26 +5,30 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/penpeer/shortlink/application/usecase"
+	"github.com/penpeer/shortlink/config"
 	"github.com/penpeer/shortlink/infrastructure/postgres"
 )
 
 func main() {
-	// ── 讀取環境變數 ────────────────────────────────────────────────────────
+	// ── 載入非機敏設定（config/app.yaml，內嵌於 binary）────────────────────
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("載入應用程式設定失敗: %v", err)
+	}
+
+	// ── 讀取機敏環境變數（.env / Docker 環境注入）────────────────────────
 	dbHost     := getEnv("DB_HOST",     "localhost")
 	dbPort     := getEnv("DB_PORT",     "5432")
 	dbUser     := getEnv("DB_USER",     "postgres")
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
 	dbName     := getEnv("DB_NAME",     "shortlink")
 
-	// 點擊事件保留天數，超過此天數的事件將被封存
-	retentionDays := getEnvInt("CLICK_RETENTION_DAYS", 90)
-	// 封存任務執行間隔（小時）
-	intervalHours := getEnvInt("ARCHIVE_CLEANUP_INTERVAL_HOURS", 24)
+	retentionDays := cfg.Cleanup.ClickRetentionDays
+	intervalHours := cfg.Cleanup.IntervalHours
 
 	log.Printf("Cleanup 啟動：保留天數=%d 天，執行間隔=%d 小時", retentionDays, intervalHours)
 
@@ -100,17 +104,4 @@ func getEnv(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
-}
-
-func getEnvInt(key string, defaultVal int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return defaultVal
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		log.Printf("警告：環境變數 %s=%q 無法解析為整數，使用預設值 %d", key, v, defaultVal)
-		return defaultVal
-	}
-	return n
 }

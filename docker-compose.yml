@@ -84,13 +84,11 @@ services:
       context: ./src/backend
       dockerfile: Dockerfile.cleanup
     environment:
-      DB_HOST:                       postgres
-      DB_PORT:                       "5432"
-      DB_USER:                       postgres
-      DB_PASSWORD:                   postgres
-      DB_NAME:                       shortlink
-      CLICK_RETENTION_DAYS:          "90"
-      ARCHIVE_CLEANUP_INTERVAL_HOURS: "24"
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_USER:     postgres
+      DB_PASSWORD: postgres
+      DB_NAME:     shortlink
     depends_on:
       postgres:
         condition: service_healthy

@@ -255,16 +255,3 @@ go test ./application/usecase/...
 | Cloudflare Tunnel | `cloudflared tunnel --url http://localhost:8080` |
 
 取得公開 URL 後，將短網址貼至 Facebook / Telegram / Discord，確認預覽卡片正常顯示。
-
-## 環境變數
-
-| 變數 | 預設值 | 說明 |
-|------|--------|------|
-| `DB_HOST` | `localhost` | PostgreSQL 主機 |
-| `DB_PORT` | `5432` | PostgreSQL 連接埠 |
-| `DB_USER` | `postgres` | 資料庫使用者 |
-| `DB_PASSWORD` | `postgres` | 資料庫密碼 |
-| `DB_NAME` | `shortlink` | 資料庫名稱 |
-| `REDIS_HOST` | `localhost` | Redis 主機 |
-| `REDIS_PORT` | `6379` | Redis 連接埠 |
-| `SERVER_PORT` | `8080` | 後端監聽連接埠 |
