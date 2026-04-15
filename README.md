@@ -38,12 +38,6 @@ docker-compose up --build --scale backend=3
 | Prometheus | http://localhost:9090 |
 | Grafana（admin/admin） | http://localhost:3001 |
 
-### 建立短網址 & 縮圖預覽示範
-
-建立短網址後，將短連結貼至 Facebook / Telegram / Discord，平台 Bot 會抓取 OG 資料並顯示預覽卡片：
-
-![短連結縮圖顯示正確](docs/result_2329.png)
-
 ### 常用 API 指令
 
 ```bash
@@ -199,9 +193,11 @@ src/
 │   │   │   ├── click_repo.go             # ClickEvent Repository 實作
 │   │   │   └── referral_repo.go          # ReferralCode Repository 實作
 │   │   ├── redis/
-│   │   │   └── cache.go                  # Redis 快取（jitter TTL、null cache）
+│   │   │   └── cache.go                  # Redis 快取（jitter TTL、null cache、點擊去重）
 │   │   ├── bloom/
 │   │   │   └── filter.go                 # Bloom Filter（bits-and-blooms）
+│   │   ├── metrics/
+│   │   │   └── metrics.go                # Prometheus 指標定義（HTTP、業務、快取層）
 │   │   └── scraper/
 │   │       └── og_scraper.go             # OG meta tag 抓取器
 │   │
@@ -212,7 +208,8 @@ src/
 │           │   ├── link_handler.go       # 建立 / 預覽 / 統計 / 排行 Handler
 │           │   └── redirect_handler.go   # 跳轉 / Bot OG HTML Handler
 │           └── middleware/
-│               └── rate_limit.go         # 請求速率限制
+│               ├── rate_limit.go         # per-IP 固定窗口速率限制（防爆破 / 濫用）
+│               └── prometheus_middleware.go  # HTTP 請求計數 / 延遲 / in-flight 埋點
 │
 └── frontend/                             # React 前端
     └── src/
@@ -340,6 +337,49 @@ Cleanup Worker（定時執行）
 
 ---
 
+### 4. 防重複點擊策略
+
+同一使用者在短時間內多次點擊同一短網址，若每次都寫入 DB 會造成點擊數虛高、統計失真。採用 **Redis + Fingerprint 時間窗口去重**。
+
+#### 流程
+
+```
+使用者點擊 /:code
+    │
+    └─→ asyncSaveClick（goroutine，不阻塞 302 回應）
+            │
+            ├─→ 計算 fingerprint
+            │       ├─→ 有 ClientIP  → SHA-256(clientIP)[:8 bytes] → 16 hex 字元
+            │       └─→ 無 ClientIP  → SHA-256(userAgent[:32])[:8 bytes]
+            │
+            ├─→ Redis SET NX + EX（原子操作）
+            │   key = dedup:click:{fingerprint}:{code}
+            │   TTL = WindowDuration（可設定，預設 10 分鐘）
+            │       ├─→ SET 成功（key 不存在） → 首次點擊 → 寫入 click_events ✅
+            │       └─→ SET 失敗（key 已存在） → 重複點擊 → 靜默略過 🚫
+            │
+            └─→ Redis 故障 → 寬鬆策略：放行點擊（寧多計，不漏計）
+```
+
+#### 設計考量
+
+| 決策 | 理由 |
+|------|------|
+| SHA-256 單向雜湊 fingerprint | IP 原文不落 Redis，保護使用者隱私；碰撞空間 2^64，實務不衝突 |
+| SET NX + EX 原子操作 | 不需 Lua Script，單一指令保證「判斷 + 寫入」的原子性，避免 race condition |
+| Redis 故障時放行 | 可觀測性優先：漏記真實點擊遠比誤殺正常點擊更難察覺，寬鬆策略保守計數 |
+| 窗口式（非永久去重） | 允許使用者隔段時間再次點擊被計算，符合真實行為模式 |
+| 水位淘汰機制 | 去重 key 數量超過 MaxKeys 時，批次清理最舊的記錄，防止 Redis 記憶體無限成長 |
+
+#### Redis Key 設計
+
+```
+dedup:click:{fingerprint}:{code}   ← 去重標記（TTL = WindowDuration）
+dedup:click:index                  ← Sorted Set，score=建立時間 ns，供水位淘汰排序
+```
+
+---
+
 ## 高可用、低延遲、可擴充性
 
 ### 高可用（High Availability）
@@ -399,3 +439,9 @@ Cleanup Worker（定時執行）
 | Cloudflare Tunnel | `cloudflared tunnel --url http://localhost:3000` |
 
 取得公開 URL 後，將短網址貼至 Facebook / Telegram / Discord，確認預覽卡片正常顯示。
+
+### 建立短網址 & 縮圖預覽示範
+
+建立短網址後，將短連結貼至 Facebook / Telegram / Discord，平台 Bot 會抓取 OG 資料並顯示預覽卡片：
+
+![短連結縮圖顯示正確](docs/result_2329.png)
