@@ -2,9 +2,12 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"strings"
 	"time"
 
@@ -22,6 +25,10 @@ type RedirectCache interface {
 	GetShortLink(ctx context.Context, code string) (*shortlink.ShortLink, error)
 	SetShortLink(ctx context.Context, link *shortlink.ShortLink) error
 	SetNullCache(ctx context.Context, code string) error
+	// IsNewClick 判斷此次點擊是否為去重窗口內的首次點擊。
+	// 首次點擊回傳 true 並設立去重標記；重複點擊回傳 false。
+	// Redis 故障時回傳 (true, err)：寬鬆策略，讓點擊通過以避免漏計。
+	IsNewClick(ctx context.Context, code, fingerprint string) (bool, error)
 }
 
 // RedirectInput redirect 請求的輸入資訊
@@ -117,7 +124,7 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 	region := uadetect.ExtractRegion(input.CFIPCountry, input.XCountry)
 
 	// 5. 非同步寫入 ClickEvent（不阻塞 redirect 回應）
-	go uc.asyncSaveClick(link.Code, detected, region, input.ReferralCode, input.ClientIP)
+	go uc.asyncSaveClick(link.Code, detected, region, input.ReferralCode, input.ClientIP, input.UserAgent)
 
 	// 6. 社群 Bot → 回傳含 OG meta tags 的 HTML，讓平台顯示預覽
 	if detected.IsBot {
@@ -135,10 +142,22 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 func (uc *RedirectShortLinkUseCase) asyncSaveClick(
 	shortLinkCode string,
 	detected uadetect.DetectResult,
-	region, referralCode, clientIP string,
+	region, referralCode, clientIP, userAgent string,
 ) {
 	// 使用獨立 context，避免 HTTP request context 被取消後 goroutine 無法寫入
 	ctx := context.Background()
+
+	// 去重判斷：同一 fingerprint 在窗口內對同一短碼只計一次點擊
+	fingerprint := fingerprintKey(clientIP, userAgent)
+	isNew, err := uc.cache.IsNewClick(ctx, shortLinkCode, fingerprint)
+	if err != nil {
+		// Redis 故障記錄 log，但採寬鬆策略繼續寫入（寧多計不漏計）
+		log.Printf("[dedup] IsNewClick 失敗，採寬鬆策略放行 code=%s: %v", shortLinkCode, err)
+	}
+	if !isNew {
+		// 重複點擊，靜默跳過，不寫 DB
+		return
+	}
 
 	// CDN Header 未帶地區（非 Cloudflare / 本機環境），嘗試用 IP 查詢國碼
 	if region == "" && clientIP != "" {
@@ -154,6 +173,22 @@ func (uc *RedirectShortLinkUseCase) asyncSaveClick(
 		ReferralCode:  referralCode,
 	}
 	_ = uc.clickRepo.Save(ctx, event)
+}
+
+// fingerprintKey 將訪客身份轉換為去重用的不可逆 fingerprint。
+// 優先使用 clientIP；Bot 常無 IP，改用 userAgent 前 32 字元作為 seed。
+// SHA-256 截前 8 bytes（16 hex 字元）：單向不可逆，碰撞空間 2^64，key 長度短。
+func fingerprintKey(clientIP, userAgent string) string {
+	seed := clientIP
+	if seed == "" {
+		if len(userAgent) > 32 {
+			seed = userAgent[:32]
+		} else {
+			seed = userAgent
+		}
+	}
+	h := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(h[:8])
 }
 
 // ogHTMLTmpl 社群 Bot 回傳的 HTML 模板

@@ -12,10 +12,11 @@ var rawConfig []byte
 
 // App 非機敏應用程式設定，從 config/app.yaml 載入
 type App struct {
-	NullCache NullCache `yaml:"null_cache"`
-	RateLimit RateLimit `yaml:"rate_limit"`
-	Bloom     Bloom     `yaml:"bloom"`
-	Cleanup   Cleanup   `yaml:"cleanup"`
+	NullCache  NullCache  `yaml:"null_cache"`
+	RateLimit  RateLimit  `yaml:"rate_limit"`
+	Bloom      Bloom      `yaml:"bloom"`
+	Cleanup    Cleanup    `yaml:"cleanup"`
+	ClickDedup ClickDedup `yaml:"click_dedup"`
 }
 
 // NullCache null cache 水位管控閾值
@@ -39,6 +40,16 @@ type Bloom struct {
 type Cleanup struct {
 	ClickRetentionDays int `yaml:"click_retention_days"`
 	IntervalHours      int `yaml:"interval_hours"`
+}
+
+// ClickDedup 點擊去重複設定
+type ClickDedup struct {
+	// WindowHours 去重時間窗口（小時）。同一 IP + 同一短碼在此窗口內只計一次點擊
+	WindowHours int `yaml:"window_hours"`
+	// MaxKeys 水位閥值：去重 key 超過此數量觸發淘汰。0 = 停用水位管控
+	MaxKeys int64 `yaml:"max_keys"`
+	// EvictCount 每次淘汰的 key 數量（MaxKeys > 0 時生效）
+	EvictCount int64 `yaml:"evict_count"`
 }
 
 // Load 解析內嵌的 app.yaml，回傳應用程式非機敏設定

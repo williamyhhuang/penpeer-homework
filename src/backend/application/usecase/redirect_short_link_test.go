@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -178,5 +179,160 @@ func TestRedirect_CacheHit(t *testing.T) {
 	}
 	if out.OriginalURL != "https://cached.example.com" {
 		t.Errorf("URL 不符：got %q", out.OriginalURL)
+	}
+}
+
+// TestDedup_SameIPSameCode_CountedOnce 同一 IP 對同一短碼連點兩次，DB 只應寫入 1 筆
+func TestDedup_SameIPSameCode_CountedOnce(t *testing.T) {
+	linkRepo  := newMockShortLinkRepo()
+	clickRepo := &mockClickRepo{}
+	cache     := newMockCache()
+
+	link := &shortlink.ShortLink{
+		Code:        "dedup1",
+		OriginalURL: "https://example.com",
+		CreatedAt:   time.Now(),
+	}
+	_ = linkRepo.Save(context.Background(), link)
+
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
+
+	input := usecase.RedirectInput{
+		Code:        "dedup1",
+		UserAgent:   "Mozilla/5.0",
+		ClientIP:    "192.168.1.1", // 私有 IP，GeoIP 查詢會直接跳過，不發外部請求
+		CFIPCountry: "TW",          // 直接提供地區，避免 GeoIP fallback 延遲
+	}
+
+	// 第一次點擊
+	_, _ = uc.Execute(context.Background(), input)
+	// 第二次點擊（相同 IP，相同 code）
+	_, _ = uc.Execute(context.Background(), input)
+
+	// asyncSaveClick 是 goroutine，需等待它完成
+	time.Sleep(50 * time.Millisecond)
+
+	if len(clickRepo.events) != 1 {
+		t.Errorf("同 IP 同 code 連點兩次，DB 應只有 1 筆，實際有 %d 筆", len(clickRepo.events))
+	}
+}
+
+// TestDedup_SameIPDifferentCode_CountedSeparately 同一 IP 對兩個不同短碼各點一次，應各計一筆
+func TestDedup_SameIPDifferentCode_CountedSeparately(t *testing.T) {
+	linkRepo  := newMockShortLinkRepo()
+	clickRepo := &mockClickRepo{}
+	cache     := newMockCache()
+
+	for _, code := range []string{"codeA", "codeB"} {
+		_ = linkRepo.Save(context.Background(), &shortlink.ShortLink{
+			Code:        code,
+			OriginalURL: "https://example.com/" + code,
+			CreatedAt:   time.Now(),
+		})
+	}
+
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
+
+	_, _ = uc.Execute(context.Background(), usecase.RedirectInput{
+		Code: "codeA", UserAgent: "Mozilla/5.0", ClientIP: "192.168.1.1", CFIPCountry: "TW",
+	})
+	_, _ = uc.Execute(context.Background(), usecase.RedirectInput{
+		Code: "codeB", UserAgent: "Mozilla/5.0", ClientIP: "192.168.1.1", CFIPCountry: "TW",
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	if len(clickRepo.events) != 2 {
+		t.Errorf("同 IP 點兩個不同 code，應有 2 筆，實際有 %d 筆", len(clickRepo.events))
+	}
+}
+
+// TestDedup_DifferentIPSameCode_BothCounted 兩個不同 IP 對同一短碼各點一次，應各計一筆
+func TestDedup_DifferentIPSameCode_BothCounted(t *testing.T) {
+	linkRepo  := newMockShortLinkRepo()
+	clickRepo := &mockClickRepo{}
+	cache     := newMockCache()
+
+	_ = linkRepo.Save(context.Background(), &shortlink.ShortLink{
+		Code:        "shared",
+		OriginalURL: "https://example.com/shared",
+		CreatedAt:   time.Now(),
+	})
+
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
+
+	_, _ = uc.Execute(context.Background(), usecase.RedirectInput{
+		Code: "shared", UserAgent: "Mozilla/5.0", ClientIP: "192.168.0.1", CFIPCountry: "TW",
+	})
+	_, _ = uc.Execute(context.Background(), usecase.RedirectInput{
+		Code: "shared", UserAgent: "Mozilla/5.0", ClientIP: "192.168.0.2", CFIPCountry: "TW",
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	if len(clickRepo.events) != 2 {
+		t.Errorf("不同 IP 點同一 code，應有 2 筆，實際有 %d 筆", len(clickRepo.events))
+	}
+}
+
+// TestDedup_EmptyIP_UsesUAFingerprint ClientIP 為空時（Bot 常見），同 UA 兩次點擊只計一次
+func TestDedup_EmptyIP_UsesUAFingerprint(t *testing.T) {
+	linkRepo  := newMockShortLinkRepo()
+	clickRepo := &mockClickRepo{}
+	cache     := newMockCache()
+
+	_ = linkRepo.Save(context.Background(), &shortlink.ShortLink{
+		Code:        "botcode",
+		OriginalURL: "https://example.com/bot",
+		CreatedAt:   time.Now(),
+	})
+
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
+
+	botUA := "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uagent.php)"
+	input := usecase.RedirectInput{
+		Code:      "botcode",
+		UserAgent: botUA,
+		ClientIP:  "", // Bot 沒有 ClientIP
+	}
+
+	_, _ = uc.Execute(context.Background(), input)
+	_, _ = uc.Execute(context.Background(), input) // 第二次，相同 UA，相同 code
+
+	time.Sleep(50 * time.Millisecond)
+
+	if len(clickRepo.events) != 1 {
+		t.Errorf("相同 Bot UA 點同一 code 兩次，DB 應只有 1 筆，實際有 %d 筆", len(clickRepo.events))
+	}
+}
+
+// TestDedup_RedisError_AllowsThrough IsNewClick 回傳錯誤時（Redis 故障），應採寬鬆策略放行寫入
+func TestDedup_RedisError_AllowsThrough(t *testing.T) {
+	linkRepo  := newMockShortLinkRepo()
+	clickRepo := &mockClickRepo{}
+	cache     := newMockCache()
+	// 注入 Redis 錯誤
+	cache.dedupError = fmt.Errorf("redis: connection refused")
+
+	_ = linkRepo.Save(context.Background(), &shortlink.ShortLink{
+		Code:        "errcode",
+		OriginalURL: "https://example.com/err",
+		CreatedAt:   time.Now(),
+	})
+
+	uc := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, nil)
+
+	_, _ = uc.Execute(context.Background(), usecase.RedirectInput{
+		Code: "errcode", UserAgent: "Mozilla/5.0", ClientIP: "192.168.1.1", CFIPCountry: "TW",
+	})
+	_, _ = uc.Execute(context.Background(), usecase.RedirectInput{
+		Code: "errcode", UserAgent: "Mozilla/5.0", ClientIP: "192.168.1.1", CFIPCountry: "TW",
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Redis 故障時寬鬆放行，兩次點擊都應寫入（寧多計不漏計）
+	if len(clickRepo.events) != 2 {
+		t.Errorf("Redis 故障時應放行所有點擊，預期 2 筆，實際有 %d 筆", len(clickRepo.events))
 	}
 }

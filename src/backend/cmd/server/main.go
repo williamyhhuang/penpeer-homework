@@ -56,10 +56,17 @@ func main() {
 	}
 
 	// ── Redis ─────────────────────────────────────────────────────────────
-	cache := rediscache.NewCache(redisHost, redisPort, "", 0, rediscache.NullCacheConfig{
-		MaxKeys:    cfg.NullCache.MaxKeys,
-		EvictCount: cfg.NullCache.EvictCount,
-	})
+	cache := rediscache.NewCache(redisHost, redisPort, "", 0,
+		rediscache.NullCacheConfig{
+			MaxKeys:    cfg.NullCache.MaxKeys,
+			EvictCount: cfg.NullCache.EvictCount,
+		},
+		rediscache.DedupConfig{
+			WindowDuration: time.Duration(cfg.ClickDedup.WindowHours) * time.Hour,
+			MaxKeys:        cfg.ClickDedup.MaxKeys,
+			EvictCount:     cfg.ClickDedup.EvictCount,
+		},
+	)
 	if err := cache.Ping(context.Background()); err != nil {
 		log.Fatalf("無法連線 Redis: %v", err)
 	}

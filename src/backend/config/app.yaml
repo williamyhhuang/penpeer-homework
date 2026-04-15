@@ -16,3 +16,8 @@ bloom:
 cleanup:
   click_retention_days: 90    # 點擊事件保留天數，超過後封存至 click_events_archive
   interval_hours: 24          # 封存任務執行間隔（小時）
+
+click_dedup:
+  window_hours: 24    # 去重時間窗口（小時）。同一 IP + 同一短碼在此窗口內只計一次點擊
+  max_keys: 0         # 水位閥值：0 = 停用水位管控（24h 窗口自然過期，通常無需額外管控）
+  evict_count: 50000  # 每次淘汰數量（max_keys > 0 時生效）

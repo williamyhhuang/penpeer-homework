@@ -126,14 +126,17 @@ func (m *mockClickRepo) GetStatsByCode(_ context.Context, code string) (*click.C
 
 // mockCache 模擬 Redis Cache（同時實作 ShortLinkCache 與 RedirectCache 介面）
 type mockCache struct {
-	store   map[string]*shortlink.ShortLink
-	nullSet map[string]bool // 記錄哪些 code 被標記為不存在（null cache）
+	store      map[string]*shortlink.ShortLink
+	nullSet    map[string]bool // 記錄哪些 code 被標記為不存在（null cache）
+	dedupSet   map[string]bool // 記錄哪些 fingerprint+code 已在去重窗口內
+	dedupError error           // 注入 IsNewClick 錯誤，測試 Redis 故障降級行為
 }
 
 func newMockCache() *mockCache {
 	return &mockCache{
-		store:   make(map[string]*shortlink.ShortLink),
-		nullSet: make(map[string]bool),
+		store:    make(map[string]*shortlink.ShortLink),
+		nullSet:  make(map[string]bool),
+		dedupSet: make(map[string]bool),
 	}
 }
 
@@ -152,4 +155,18 @@ func (m *mockCache) GetShortLink(_ context.Context, code string) (*shortlink.Sho
 func (m *mockCache) SetNullCache(_ context.Context, code string) error {
 	m.nullSet[code] = true
 	return nil
+}
+
+// IsNewClick 模擬 Redis SET NX 去重行為
+// dedupError != nil 時模擬 Redis 故障，回傳 (true, err) 讓點擊通過（寬鬆策略）
+func (m *mockCache) IsNewClick(_ context.Context, code, fingerprint string) (bool, error) {
+	if m.dedupError != nil {
+		return true, m.dedupError
+	}
+	key := fingerprint + ":" + code
+	if m.dedupSet[key] {
+		return false, nil // 已存在，重複點擊
+	}
+	m.dedupSet[key] = true
+	return true, nil // 首次點擊
 }

@@ -22,10 +22,16 @@ const (
 	// nullValue Redis 中標記「此短碼不存在於 DB」的哨兵值
 	nullValue = "__null__"
 
-	keyPrefix    = "shortlink:"
+	keyPrefix = "shortlink:"
 	// nullIndexKey sorted set：score=寫入時間戳(ns)，member=short code
 	// 用於水位到達時能快速找到最舊的 null cache key 進行淘汰
 	nullIndexKey = "nullcache:index"
+
+	// dedupPrefix 點擊去重複 key 前綴，格式：dedup:click:{fingerprint}:{code}
+	dedupPrefix = "dedup:click:"
+	// dedupIndexKey 點擊去重複水位索引（sorted set），score=寫入時間戳(ns)
+	// 僅在 DedupConfig.MaxKeys > 0 時啟用
+	dedupIndexKey = "dedup:click:index"
 )
 
 // NullCacheConfig null cache 水位管控設定
@@ -36,19 +42,30 @@ type NullCacheConfig struct {
 	EvictCount int64
 }
 
-// Cache 封裝 Redis 操作，提供短網址的快取功能
-type Cache struct {
-	client  *redis.Client
-	nullCfg NullCacheConfig
+// DedupConfig 點擊去重複設定
+type DedupConfig struct {
+	// WindowDuration 去重時間窗口，同一 fingerprint + code 在窗口內只計一次點擊
+	WindowDuration time.Duration
+	// MaxKeys 水位閥值：去重 key 超過此數量觸發淘汰。0 = 停用水位管控
+	MaxKeys int64
+	// EvictCount 每次淘汰的 key 數量（MaxKeys > 0 時生效）
+	EvictCount int64
 }
 
-func NewCache(host, port, password string, db int, nullCfg NullCacheConfig) *Cache {
+// Cache 封裝 Redis 操作，提供短網址的快取功能
+type Cache struct {
+	client   *redis.Client
+	nullCfg  NullCacheConfig
+	dedupCfg DedupConfig
+}
+
+func NewCache(host, port, password string, db int, nullCfg NullCacheConfig, dedupCfg DedupConfig) *Cache {
 	client := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", host, port),
 		Password: password,
 		DB:       db,
 	})
-	return &Cache{client: client, nullCfg: nullCfg}
+	return &Cache{client: client, nullCfg: nullCfg, dedupCfg: dedupCfg}
 }
 
 func (c *Cache) Ping(ctx context.Context) error {
@@ -146,4 +163,54 @@ func (c *Cache) evictIfOverWatermark(ctx context.Context) {
 // DeleteShortLink 從快取刪除短網址
 func (c *Cache) DeleteShortLink(ctx context.Context, code string) error {
 	return c.client.Del(ctx, keyPrefix+code).Err()
+}
+
+// IsNewClick 判斷此次點擊是否為去重窗口內的首次點擊。
+// 使用 Redis SET NX + EX 原子操作：key 不存在時寫入並回傳 true（首次點擊）；
+// key 已存在時回傳 false（重複點擊，應跳過寫入 DB）。
+// 若 Redis 操作失敗，回傳 (true, err)：寬鬆策略——寧可多計，不可漏計。
+func (c *Cache) IsNewClick(ctx context.Context, code, fingerprint string) (bool, error) {
+	key := dedupPrefix + fingerprint + ":" + code
+	ok, err := c.client.SetNX(ctx, key, "1", c.dedupCfg.WindowDuration).Result()
+	if err != nil {
+		// Redis 故障時放行，避免去重失效導致漏計真實點擊
+		return true, fmt.Errorf("dedup SetNX 失敗: %w", err)
+	}
+	// 首次點擊且啟用水位管控時，非同步更新索引
+	if ok && c.dedupCfg.MaxKeys > 0 {
+		go c.trackDedupKey(context.Background(), fingerprint+":"+code)
+	}
+	return ok, nil
+}
+
+// trackDedupKey 將去重 key 加入 sorted set 索引，供水位淘汰使用
+func (c *Cache) trackDedupKey(ctx context.Context, member string) {
+	c.client.ZAdd(ctx, dedupIndexKey, redis.Z{
+		Score:  float64(time.Now().UnixNano()),
+		Member: member,
+	})
+	c.evictDedupIfOverWatermark(ctx)
+}
+
+// evictDedupIfOverWatermark 當去重索引超過水位閥值時，淘汰最舊的 EvictCount 個 key
+func (c *Cache) evictDedupIfOverWatermark(ctx context.Context) {
+	count, err := c.client.ZCard(ctx, dedupIndexKey).Result()
+	if err != nil || count <= c.dedupCfg.MaxKeys {
+		return
+	}
+
+	items, err := c.client.ZPopMin(ctx, dedupIndexKey, c.dedupCfg.EvictCount).Result()
+	if err != nil || len(items) == 0 {
+		return
+	}
+
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		if member, ok := item.Member.(string); ok {
+			keys = append(keys, dedupPrefix+member)
+		}
+	}
+	if len(keys) > 0 {
+		c.client.Del(ctx, keys...)
+	}
 }
