@@ -17,6 +17,7 @@ import (
 	"github.com/penpeer/shortlink/application/uadetect"
 	"github.com/penpeer/shortlink/domain/click"
 	"github.com/penpeer/shortlink/domain/shortlink"
+	"github.com/penpeer/shortlink/infrastructure/metrics"
 )
 
 // RedirectCache 定義 redirect 路徑所需的快取介面
@@ -76,25 +77,36 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 	// 0. Bloom filter 第一道篩查：確定不存在的 code 直接拒絕
 	// false → 肯定不在 DB，無需查 Redis 或 DB（防快取穿透 + 降低無效請求成本）
 	if uc.bloom != nil && !uc.bloom.MightExist(input.Code) {
+		metrics.BloomFilterChecks.WithLabelValues("reject").Inc()
+		metrics.RedirectTotal.WithLabelValues("bloom_miss").Inc()
 		return nil, fmt.Errorf("短碼不存在: %s", input.Code)
 	}
+	metrics.BloomFilterChecks.WithLabelValues("pass").Inc()
 
 	// 1. 優先查 Redis 快取（降低 redirect 延遲，這是效能關鍵路徑）
 	link, err := uc.cache.GetShortLink(ctx, input.Code)
 
 	// 快取穿透防護：此 code 已被標記不存在，直接拒絕不查 DB
 	if errors.Is(err, shortlink.ErrNullCache) {
+		metrics.CacheHitTotal.WithLabelValues("get", "null_cache").Inc()
+		metrics.RedirectTotal.WithLabelValues("not_found").Inc()
 		return nil, fmt.Errorf("短碼不存在: %s", input.Code)
 	}
 	if err != nil {
 		// 其他快取讀取錯誤不中斷，fallback 到 DB
+		metrics.CacheHitTotal.WithLabelValues("get", "error").Inc()
 		link = nil
+	} else if link != nil {
+		metrics.CacheHitTotal.WithLabelValues("get", "hit").Inc()
+		metrics.RedirectTotal.WithLabelValues("redis_hit").Inc()
+	} else {
+		metrics.CacheHitTotal.WithLabelValues("get", "miss").Inc()
 	}
 
 	// 2. Cache miss → 用 singleflight 查 PostgreSQL
 	// 防止快取擊穿：同一 code 的並發 miss 只觸發一次 DB 查詢，其餘等待共享結果
 	if link == nil {
-		val, sfErr, _ := uc.sfGroup.Do(input.Code, func() (any, error) {
+		val, sfErr, shared := uc.sfGroup.Do(input.Code, func() (any, error) {
 			l, e := uc.linkRepo.FindByCode(ctx, input.Code)
 			if e != nil {
 				return nil, fmt.Errorf("查詢短網址失敗: %w", e)
@@ -108,14 +120,21 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 			_ = uc.cache.SetShortLink(ctx, l)
 			return l, nil
 		})
+		if shared {
+			// 此請求共享了其他 goroutine 的 DB 查詢結果（singleflight 去重生效）
+			metrics.SingleflightDedup.Inc()
+		}
 		if sfErr != nil {
+			metrics.RedirectTotal.WithLabelValues("not_found").Inc()
 			return nil, sfErr
 		}
+		metrics.RedirectTotal.WithLabelValues("db_hit").Inc()
 		link = val.(*shortlink.ShortLink)
 	}
 
 	// 3. 檢查是否過期
 	if link.IsExpired() {
+		metrics.RedirectTotal.WithLabelValues("expired").Inc()
 		return nil, fmt.Errorf("短網址已過期: %s", input.Code)
 	}
 
@@ -172,7 +191,11 @@ func (uc *RedirectShortLinkUseCase) asyncSaveClick(
 		DeviceType:    detected.DeviceType,
 		ReferralCode:  referralCode,
 	}
-	_ = uc.clickRepo.Save(ctx, event)
+	if err := uc.clickRepo.Save(ctx, event); err != nil {
+		metrics.ClicksRecordedTotal.WithLabelValues("error").Inc()
+	} else {
+		metrics.ClicksRecordedTotal.WithLabelValues("success").Inc()
+	}
 }
 
 // fingerprintKey 將訪客身份轉換為去重用的不可逆 fingerprint。

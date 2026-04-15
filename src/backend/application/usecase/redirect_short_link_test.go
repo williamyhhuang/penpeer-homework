@@ -212,8 +212,8 @@ func TestDedup_SameIPSameCode_CountedOnce(t *testing.T) {
 	// asyncSaveClick 是 goroutine，需等待它完成
 	time.Sleep(50 * time.Millisecond)
 
-	if len(clickRepo.events) != 1 {
-		t.Errorf("同 IP 同 code 連點兩次，DB 應只有 1 筆，實際有 %d 筆", len(clickRepo.events))
+	if clickRepo.Len() != 1 {
+		t.Errorf("同 IP 同 code 連點兩次，DB 應只有 1 筆，實際有 %d 筆", clickRepo.Len())
 	}
 }
 
@@ -242,8 +242,8 @@ func TestDedup_SameIPDifferentCode_CountedSeparately(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if len(clickRepo.events) != 2 {
-		t.Errorf("同 IP 點兩個不同 code，應有 2 筆，實際有 %d 筆", len(clickRepo.events))
+	if clickRepo.Len() != 2 {
+		t.Errorf("同 IP 點兩個不同 code，應有 2 筆，實際有 %d 筆", clickRepo.Len())
 	}
 }
 
@@ -270,8 +270,8 @@ func TestDedup_DifferentIPSameCode_BothCounted(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if len(clickRepo.events) != 2 {
-		t.Errorf("不同 IP 點同一 code，應有 2 筆，實際有 %d 筆", len(clickRepo.events))
+	if clickRepo.Len() != 2 {
+		t.Errorf("不同 IP 點同一 code，應有 2 筆，實際有 %d 筆", clickRepo.Len())
 	}
 }
 
@@ -301,8 +301,8 @@ func TestDedup_EmptyIP_UsesUAFingerprint(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if len(clickRepo.events) != 1 {
-		t.Errorf("相同 Bot UA 點同一 code 兩次，DB 應只有 1 筆，實際有 %d 筆", len(clickRepo.events))
+	if clickRepo.Len() != 1 {
+		t.Errorf("相同 Bot UA 點同一 code 兩次，DB 應只有 1 筆，實際有 %d 筆", clickRepo.Len())
 	}
 }
 
@@ -332,7 +332,7 @@ func TestDedup_RedisError_AllowsThrough(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Redis 故障時寬鬆放行，兩次點擊都應寫入（寧多計不漏計）
-	if len(clickRepo.events) != 2 {
-		t.Errorf("Redis 故障時應放行所有點擊，預期 2 筆，實際有 %d 筆", len(clickRepo.events))
+	if clickRepo.Len() != 2 {
+		t.Errorf("Redis 故障時應放行所有點擊，預期 2 筆，實際有 %d 筆", clickRepo.Len())
 	}
 }

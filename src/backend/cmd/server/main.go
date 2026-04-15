@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/penpeer/shortlink/application/usecase"
 	"github.com/penpeer/shortlink/config"
 	bloomfilter "github.com/penpeer/shortlink/infrastructure/bloom"
@@ -106,6 +107,21 @@ func main() {
 		Handler: router,
 	}
 
+	// ── 啟動 Prometheus metrics 專用 HTTP server（port 9091）─────────────
+	// 獨立於 nginx，讓 Prometheus 直接 scrape 每個副本，避免 round-robin 遺漏數據
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsSrv := &http.Server{
+		Addr:    ":9091",
+		Handler: metricsMux,
+	}
+	go func() {
+		log.Printf("Metrics server 啟動於 :9091")
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Metrics server 錯誤: %v", err)
+		}
+	}()
+
 	// 優雅關機：接收 SIGINT/SIGTERM 後等待進行中的請求完成
 	go func() {
 		log.Printf("伺服器啟動於 :%s", serverPort)
@@ -123,6 +139,10 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatalf("強制關機: %v", err)
+	}
+	// 同時關閉 metrics server
+	if err := metricsSrv.Shutdown(ctx); err != nil {
+		log.Printf("Metrics server 強制關機: %v", err)
 	}
 	log.Println("伺服器已關閉")
 }

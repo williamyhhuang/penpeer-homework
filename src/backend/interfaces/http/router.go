@@ -2,6 +2,7 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/penpeer/shortlink/interfaces/http/handler"
 	"github.com/penpeer/shortlink/interfaces/http/middleware"
 )
@@ -16,6 +17,10 @@ func NewRouter(
 
 	// CORS：允許前端跨來源請求
 	r.Use(corsMiddleware())
+
+	// Prometheus metrics middleware（計時每個請求，記錄 HTTP 指標）
+	// 掛在業務 middleware 之前，確保計時涵蓋完整請求週期
+	r.Use(middleware.PrometheusMiddleware())
 
 	// 短網址核心 redirect（效能關鍵路徑，per-IP rate limit 防止惡意掃碼）
 	r.GET("/:code", middleware.RateLimitMiddleware(rlCfg), redirectHandler.Redirect)
@@ -37,6 +42,9 @@ func NewRouter(
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// Prometheus metrics 端點（供 Prometheus scrape，不走 nginx）
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	return r
 }

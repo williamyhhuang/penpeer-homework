@@ -10,6 +10,7 @@ import (
 	"github.com/penpeer/shortlink/application/codegen"
 	"github.com/penpeer/shortlink/domain/referral"
 	"github.com/penpeer/shortlink/domain/shortlink"
+	"github.com/penpeer/shortlink/infrastructure/metrics"
 	"github.com/penpeer/shortlink/infrastructure/scraper"
 )
 
@@ -78,6 +79,8 @@ func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShort
 	if err := uc.linkRepo.Save(ctx, link); err != nil {
 		return nil, fmt.Errorf("儲存短網址失敗: %w", err)
 	}
+	// DB save 成功才計入，確保指標反映真實建立量
+	metrics.LinksCreatedTotal.Inc()
 
 	// 5. 寫入 Redis 快取（降低後續 redirect 的 DB 查詢）
 	// 快取失敗不中斷主流程，只影響效能

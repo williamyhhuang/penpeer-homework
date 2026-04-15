@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/penpeer/shortlink/domain/shortlink"
+	"github.com/penpeer/shortlink/infrastructure/metrics"
 )
 
 const (
@@ -86,7 +87,12 @@ func (c *Cache) SetShortLink(ctx context.Context, link *shortlink.ShortLink) err
 		return fmt.Errorf("序列化短網址失敗: %w", err)
 	}
 	key := keyPrefix + link.Code
-	return c.client.Set(ctx, key, data, jitteredTTL()).Err()
+	if err := c.client.Set(ctx, key, data, jitteredTTL()).Err(); err != nil {
+		metrics.CacheHitTotal.WithLabelValues("set", "error").Inc()
+		return err
+	}
+	metrics.CacheHitTotal.WithLabelValues("set", "success").Inc()
+	return nil
 }
 
 // GetShortLink 從 Redis 取得短網址
@@ -141,6 +147,8 @@ func (c *Cache) evictIfOverWatermark(ctx context.Context) {
 	if err != nil || count <= c.nullCfg.MaxKeys {
 		return
 	}
+	// 觸發淘汰，記錄水位事件（頻繁淘汰代表無效短碼請求量大）
+	metrics.NullCacheEvictions.Inc()
 
 	// ZPOPMIN：原子地取出並移除 sorted set 中分數最小（最舊）的 EvictCount 個 member
 	items, err := c.client.ZPopMin(ctx, nullIndexKey, c.nullCfg.EvictCount).Result()

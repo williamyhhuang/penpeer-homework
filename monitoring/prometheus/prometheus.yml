@@ -1,0 +1,34 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'shortlink-dev'
+
+scrape_configs:
+  # Backend 應用程式指標（走 port 9091，不經 nginx 避免 round-robin 干擾）
+  # honor_labels: true 保留 backend 自帶的 instance label（含 HOSTNAME）
+  - job_name: 'shortlink-backend'
+    static_configs:
+      - targets: ['backend:9091']
+    honor_labels: true
+    scrape_interval: 10s
+
+  # PostgreSQL 指標（postgres-exporter 標準 metrics）
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # Redis 指標（redis-exporter 標準 metrics）
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # 容器資源指標（cAdvisor：CPU、記憶體、網路 I/O）
+  # 只保留 shortlink 相關容器，降低無關 series 數量
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metric_relabel_configs:
+      - source_labels: [container_label_com_docker_compose_service]
+        regex: 'backend|postgres|redis|loadbalancer|frontend|cleanup'
+        action: keep
