@@ -66,6 +66,52 @@ cd src/backend
 go test ./application/usecase/...
 ```
 
+### 整合測試
+
+整合測試使用 [testcontainers-go](https://golang.testcontainers.org/) 在本機自動啟動 PostgreSQL 與 Redis 容器，無需手動建置任何服務，測試結束後容器自動清除。
+
+#### 前置需求
+
+- Docker Desktop 已啟動（testcontainers 需要 Docker daemon）
+
+#### 執行方式
+
+```bash
+cd src/backend
+go test -v -tags integration ./tests/integration/...
+```
+
+#### 測試覆蓋範圍
+
+| 測試函式 | 驗證內容 |
+|---|---|
+| `TestCreateAndRedirect` | 建立短網址 → GET `/:code` → 302 redirect 到原始 URL |
+| `TestRedirectRecordsClick_WithReferralCode` | 帶 `?ref=` 點擊後，推薦碼正確寫入 DB 並可從 analytics API 查到 |
+| `TestRedirectRecordsClick_WithRegion` | 帶 `X-Country` header 點擊後，地區正確寫入 DB |
+| `TestRedirectRecordsClick_BothReferralAndRegion` | 推薦碼 + 地區同時帶入，兩者都正確記錄 |
+| `TestRedirectBot_ReturnsOGHTML` | 社群平台 Bot（`facebookexternalhit`）收到 200 + OG HTML，不 redirect |
+| `TestRedirect_NotFound` | 不存在的短碼回傳 404 |
+| `TestCreateWithReferral_ResponseContainsReferralCode` | 建立時帶 `referral_owner_id`，回應包含 `referral_code` |
+| `TestMultipleClicks_CountAccumulates` | 多次點擊後 `total_clicks` 正確累加 |
+
+#### 技術架構
+
+```
+整合測試流程
+    │
+    ├─→ TestMain：testcontainers-go 啟動 postgres:18.3 + redis:7.2.7-alpine
+    │       └─→ 執行 SQL migration → 依賴注入組裝 Use Cases / Handlers
+    │
+    ├─→ httptest.NewServer(router) → 完整 HTTP 層，含 rate limit middleware
+    │
+    ├─→ 各 Test*：透過真實 HTTP 呼叫驗證 API 行為
+    │       └─→ asyncSaveClick 為 goroutine，click 驗證使用 require.Eventually + DB 查詢
+    │
+    └─→ TestMain 結束：自動 Terminate 兩個容器
+```
+
+測試檔案位於 `src/backend/tests/integration/`，以 `//go:build integration` build tag 隔離，一般 `go test ./...` 不會執行，需明確加 `-tags integration`。
+
 ---
 
 ## 技術棧
