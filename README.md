@@ -1,6 +1,78 @@
 # 社群短網址服務
 
-前後端分離的短網址平台，支援社群預覽（OG meta tags）、點擊追蹤與推薦碼歸因。
+前後端分離的短網址平台，支援：
+- **社群預覽卡片**：建立時預先抓取 OG meta tags，讓 Facebook / Telegram / Discord 等平台正確顯示縮圖與摘要
+- **點擊追蹤與分析**：記錄裝置類型、地理位置、推薦碼來源
+- **推薦碼歸因**：短網址可附加推薦碼（`?ref=xxx`），追蹤各推薦來源的點擊比例
+- **排行榜**：即時顯示所有短碼的點擊數排名
+- **水平擴展**：Nginx Load Balancer + `--scale backend=N` 快速擴充後端副本
+
+---
+
+## Quick Start
+
+### 前置需求
+
+- Docker & Docker Compose
+
+### 啟動所有服務
+
+```bash
+docker-compose up --build
+```
+
+水平擴充（3 個 backend 副本）：
+
+```bash
+docker-compose up --build --scale backend=3
+```
+
+### 服務入口
+
+| 服務 | URL |
+|------|-----|
+| 前端（建立短網址） | http://localhost:3000 |
+| 排行榜 Dashboard | http://localhost:3000/analytics |
+| 單碼 Analytics | http://localhost:3000/analytics/{code} |
+| 後端 API | http://localhost:8080 |
+| Prometheus | http://localhost:9090 |
+| Grafana（admin/admin） | http://localhost:3001 |
+
+### 建立短網址 & 縮圖預覽示範
+
+建立短網址後，將短連結貼至 Facebook / Telegram / Discord，平台 Bot 會抓取 OG 資料並顯示預覽卡片：
+
+![短連結縮圖顯示正確](docs/result_2329.png)
+
+### 常用 API 指令
+
+```bash
+# 建立短網址
+curl -X POST http://localhost:8080/api/v1/links \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.google.com"}'
+
+# 302 跳轉測試
+curl -I http://localhost:8080/aB3xYz7
+
+# 點擊統計
+curl http://localhost:8080/api/v1/links/aB3xYz7/analytics
+
+# OG 預覽資料
+curl http://localhost:8080/api/v1/links/aB3xYz7/preview
+
+# 排行榜
+curl http://localhost:8080/api/v1/links/ranking
+```
+
+### 本機單元測試
+
+```bash
+cd src/backend
+go test ./application/usecase/...
+```
+
+---
 
 ## 技術棧
 
@@ -18,8 +90,11 @@
 | 前端語言 | TypeScript | 6.0 |
 | 前端框架 | React | 18.2 |
 | 容器化 | Docker / Docker Compose | — |
+| 監控 | Prometheus + Grafana | 2.51.2 / 10.4.2 |
 
-## 系統架構（Docker Compose）
+---
+
+## 系統架構
 
 ```
                      外部使用者 / 社群 Bot
@@ -59,31 +134,32 @@
 └─────────────────────┘       └─────────────────────┘
               ▲
               │
-┌─────────────┴───────────────┐
-│       Cleanup Worker        │
-│  （定期清理過期資料）         │
-└─────────────────────────────┘
+┌─────────────┴───────────────┐   ┌─────────────────────┐
+│       Cleanup Worker        │   │   Prometheus/Grafana │
+│  （定期清理過期資料）        │   │   metrics 監控       │
+└─────────────────────────────┘   └─────────────────────┘
 ```
 
-### 各服務說明
+### Docker Compose 服務清單
 
 | Container | 映像檔 | 對外 Port | 說明 |
 |-----------|--------|-----------|------|
-| `shortlink-frontend` | React + Nginx (自建) | 3000 | 靜態資源 + 反向代理 API |
+| `shortlink-frontend` | React + Nginx（自建） | 3000 | 靜態資源 + 反向代理 API |
 | `shortlink-lb` | nginx:alpine | 8080 | Round-Robin 負載均衡，分流到 backend 副本 |
-| `backend` × N | Go + Gin (自建) | — | API 伺服器，`--scale backend=N` 水平擴充 |
+| `backend` × N | Go + Gin（自建） | — | API 伺服器，`--scale backend=N` 水平擴充 |
 | `shortlink-postgres` | postgres:18.3 | 5432 | 主資料庫 |
 | `shortlink-redis` | redis:7.2.7-alpine | 6379 | 短網址快取、null cache、Bloom Filter |
-| `cleanup` | Go (自建) | — | 定期清理過期資料的背景 Worker |
-
-> **水平擴充**：`docker-compose up --build --scale backend=3`  
-> Load Balancer 會自動將流量均分至三個 backend 副本。
+| `cleanup` | Go（自建） | — | 定期清理過期資料的背景 Worker |
+| `shortlink-prometheus` | prom/prometheus:v2.51.2 | 9090 | 指標收集 |
+| `shortlink-grafana` | grafana/grafana:10.4.2 | 3001 | 儀表板（admin/admin） |
 
 ---
 
-## 專案架構
+## 程式架構
 
-採用 **DDD + Hexagonal Architecture**，前後端完全分離。
+採用 **DDD + Hexagonal Architecture（六角架構）**，前後端完全分離。
+
+**依賴方向**：外層依賴內層，Domain 不得 import 任何框架。
 
 ```
 src/
@@ -110,31 +186,20 @@ src/
 │   │   │   ├── get_preview.go            # 取得 OG 預覽資料
 │   │   │   ├── get_analytics.go          # 點擊統計與推薦歸因
 │   │   │   ├── get_ranking.go            # 點擊數排行榜
-│   │   │   ├── bloom.go                  # Bloom Filter 前置過濾
-│   │   │   ├── mock_test.go              # Repository mock
-│   │   │   ├── create_short_link_test.go
-│   │   │   ├── redirect_short_link_test.go
-│   │   │   ├── get_preview_test.go
-│   │   │   ├── get_analytics_test.go
-│   │   │   └── get_ranking_test.go
+│   │   │   └── bloom.go                  # Bloom Filter Port 介面
 │   │   ├── codegen/
-│   │   │   └── codegen.go                # 隨機短碼產生器（Base62）
+│   │   │   └── codegen.go                # 短碼產生器（Base62 + crypto/rand）
 │   │   └── uadetect/
 │   │       └── uadetect.go               # User-Agent Bot 偵測
 │   │
 │   ├── infrastructure/                   # 基礎設施層（外部適配器）
 │   │   ├── postgres/
-│   │   │   ├── models/
-│   │   │   │   ├── shortlink_model.go    # GORM ShortLink ORM 模型
-│   │   │   │   ├── click_model.go        # GORM ClickEvent ORM 模型
-│   │   │   │   └── referral_model.go     # GORM ReferralCode ORM 模型
-│   │   │   ├── db.go                     # GORM 連線池初始化
-│   │   │   ├── migrator.go               # Auto-migrate（GORM）
+│   │   │   ├── migrations/               # 001_init.sql、002_archive.sql
 │   │   │   ├── shortlink_repo.go         # ShortLink Repository 實作
 │   │   │   ├── click_repo.go             # ClickEvent Repository 實作
 │   │   │   └── referral_repo.go          # ReferralCode Repository 實作
 │   │   ├── redis/
-│   │   │   └── cache.go                  # Redis 快取（含 jitter TTL、null cache）
+│   │   │   └── cache.go                  # Redis 快取（jitter TTL、null cache）
 │   │   ├── bloom/
 │   │   │   └── filter.go                 # Bloom Filter（bits-and-blooms）
 │   │   └── scraper/
@@ -152,19 +217,15 @@ src/
 └── frontend/                             # React 前端
     └── src/
         ├── App.tsx                       # 路由根元件
-        ├── main.tsx                      # 應用進入點
-        ├── api/
-        │   └── client.ts                 # Axios API 客戶端封裝
-        ├── components/
-        │   ├── CreateLinkForm.tsx         # 建立短網址表單
-        │   ├── LinkResult.tsx             # 短網址建立結果顯示
-        │   ├── AnalyticsDashboard.tsx     # 單碼點擊統計儀表板
-        │   └── RankingDashboard.tsx       # 全域排行榜儀表板
-        └── types/
-            └── index.ts                  # TypeScript 型別定義
+        ├── api/client.ts                 # Axios API 客戶端封裝
+        └── components/
+            ├── CreateLinkForm.tsx         # 建立短網址表單
+            ├── LinkResult.tsx             # 短網址建立結果顯示
+            ├── AnalyticsDashboard.tsx     # 單碼點擊統計儀表板
+            └── RankingDashboard.tsx       # 全域排行榜儀表板
 ```
 
-## API 端點
+### API 端點
 
 | Method | Path | 說明 |
 |--------|------|------|
@@ -174,70 +235,142 @@ src/
 | `GET` | `/api/v1/links/ranking` | 所有短碼點擊數排行榜 |
 | `GET` | `/api/v1/links/:code/analytics` | 單碼點擊統計與推薦歸因 |
 | `GET` | `/health` | 健康檢查 |
+| `GET` | `/metrics` | Prometheus scrape（不走 nginx） |
 
-## 快速啟動
+---
 
-### 前置需求
+## 設計決策
 
-- Docker & Docker Compose
+### 1. Redis 快取策略
 
-### 啟動所有服務
+Redirect 為最高頻操作，目標是絕大多數請求不碰 PostgreSQL。
 
-```bash
-docker-compose up --build
+#### 快取流程
+
+```
+Redirect 請求
+    │
+    ├─→ [1] Bloom Filter（快速排除肯定不存在的短碼）
+    │         ├─→ MightExist = false → 直接 404，不查 Redis / DB
+    │         └─→ MightExist = true  → 繼續查 Redis
+    │
+    ├─→ [2] GetShortLink(code)
+    │       ├─→ null cache 命中 → 直接回傳 404（不查 DB）
+    │       ├─→ cache hit      → 回傳快取資料
+    │       └─→ cache miss ──→ [3] singleflight.Do(code)
+    │                               │  ← 同一 code 的並發請求在此等待 →
+    │                               ├─→ FindByCode(DB)
+    │                               │       ├─→ 找到 → SetShortLink（回填快取）
+    │                               │       └─→ 找不到 → SetNullCache（寫入不存在標記）
+    │                               └─→ 回傳結果給所有等待的 goroutine
+    └─→ 302 redirect / OG HTML
 ```
 
-服務啟動後：
+#### 三層快取防護
 
-| 服務 | URL |
-|------|-----|
-| 前端（建立短網址） | http://localhost:3000 |
-| 排行榜 Dashboard | http://localhost:3000/analytics |
-| 單碼 Analytics | http://localhost:3000/analytics/{code} |
-| 後端 API | http://localhost:8080 |
-| PostgreSQL | localhost:5432 |
-| Redis | localhost:6379 |
+| 防護 | 問題情境 | 實作方式 |
+|------|---------|---------|
+| **雪崩 (Avalanche)** | 大量 key 同時過期，DB 瞬間承受全部流量 | TTL 基礎 24h ± 20% 隨機 jitter（實際 19.2h～28.8h） |
+| **擊穿 (Stampede)** | 熱點 key 過期瞬間，N 個並發請求同時 cache miss | `singleflight.Group`：同一 code 並發 miss 只有 1 個 goroutine 查 DB |
+| **穿透 (Penetration)** | 不存在的 code 每次請求都打到 DB | DB 回 nil 時寫入 `__null__` 標記（TTL 5 分鐘） |
 
-## 本機測試
+#### Bloom Filter 防穿透（第一道防線）
 
-### 建立短網址
+- 所有已建立的短碼在建立時加入 Redis-backed Bloom Filter
+- 請求到達時先呼叫 `MightExist(code)`，回傳 `false` 代表**肯定不存在**，直接 404 拒絕，不碰 Redis / DB
+- 誤判率（false positive）極低，不影響正常使用
 
-```bash
-curl -X POST http://localhost:8080/api/v1/links \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.google.com"}'
+#### Cache Key 設計
+
+```
+shortlink:{code}   ← 正常資料（TTL: 19.2h ～ 28.8h）
+shortlink:{code}   ← 值為 "__null__" 代表此 code 不存在（TTL: 5 分鐘）
 ```
 
-回傳範例：
+---
 
-```json
-{
-  "code": "aB3xYz",
-  "short_url": "http://localhost:8080/aB3xYz",
-  "original_url": "https://www.google.com"
-}
+### 2. 短碼產生機制
+
+**Base62 + `crypto/rand`**，長度固定 7 碼。
+
+```
+charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+容量    = 62^7 ≈ 35 億組不重複短碼
 ```
 
-### 測試 Redirect
+設計考量：
 
-```bash
-# 只看 response header（確認 302）
-curl -I http://localhost:8080/aB3xYz
-# 預期：HTTP/1.1 302 Found
-#        Location: https://www.google.com
+| 決策 | 理由 |
+|------|------|
+| 使用 `crypto/rand` 而非 `math/rand` | 防止短碼被預測，避免惡意枚舉 |
+| 長度選 7 | 35 億組足夠一般規模；8 碼才 220 億，URL 卻多了 1 字元，邊際效益低 |
+| 碰撞處理 | 建立時先查 Bloom Filter + DB，衝突則重試產生新碼 |
+| URL 安全字元 | 字符集不含 `+`, `/`, `=` 等需要 URL encode 的字元 |
+
+---
+
+### 3. 定期封存資料
+
+主資料表（`short_links`、`click_events`）若無限成長，查詢效能會隨時間劣化。採用獨立的 **Cleanup Worker** Container 定期執行封存，不影響 API 服務。
+
+#### 封存策略
+
+```
+Cleanup Worker（定時執行）
+    │
+    ├─→ Step 1：封存過期短網址
+    │       ├─→ 找出 expires_at < NOW() 的 short_links
+    │       ├─→ 將其 click_events 搬至 click_events_archive
+    │       ├─→ 將其 referral_codes 搬至 referral_codes_archive
+    │       └─→ 將短網址本身搬至 short_links_archive（原表刪除）
+    │
+    └─→ Step 2：封存舊點擊事件（active 短碼的歷史資料）
+            └─→ 將超過保留天數的 click_events 搬至 click_events_archive
 ```
 
-### 查看點擊統計
+#### 封存表設計
 
-```bash
-curl http://localhost:8080/api/v1/links/aB3xYz/analytics
-```
+| 封存表 | 說明 |
+|--------|------|
+| `short_links_archive` | 已過期短網址的歷史紀錄 |
+| `referral_codes_archive` | 隨短網址一同封存的推薦碼 |
+| `click_events_archive` | 過期短網址的點擊事件，以及 active 短碼的超齡點擊事件 |
 
-### 查看 OG 預覽
+封存資料保留供日後稽核或分析，不直接刪除。
 
-```bash
-curl http://localhost:8080/api/v1/links/aB3xYz/preview
-```
+---
+
+## 高可用、低延遲、可擴充性
+
+### 高可用（High Availability）
+
+| 機制 | 說明 |
+|------|------|
+| 多 backend 副本 | `--scale backend=N`，任意一副本掛掉 Nginx LB 自動略過 |
+| Graceful Shutdown | `SIGTERM` 信號觸發，等待飛行中的請求完成再退出 |
+| 健康檢查 | `/health` 端點，Docker / Nginx 用於存活探測 |
+| Redis 容錯 | 快取 miss 時自動 fallback 查 PostgreSQL，不因 Redis 不可用而服務中斷 |
+
+### 低延遲（Low Latency）
+
+| 機制 | 說明 |
+|------|------|
+| Redis 快取 | Redirect 最常見操作，絕大多數請求在 Redis 層解決，不查 DB |
+| singleflight | 熱點 key 瞬間 miss 時，只發一個 DB 查詢，其餘請求共用結果 |
+| 非同步寫入 | 302 回應後，goroutine 非同步寫入 ClickEvent，不阻塞使用者請求 |
+| OG 預先抓取 | 建立時就抓好存 DB，Bot 到來時直接讀取，不對外發 HTTP 請求 |
+| Bloom Filter | 肯定不存在的短碼在記憶體層直接拒絕，連 Redis round-trip 都省掉 |
+
+### 可擴充性（Scalability）
+
+| 機制 | 說明 |
+|------|------|
+| 無狀態 backend | 所有狀態存 PostgreSQL / Redis，backend 可任意擴充副本數 |
+| Nginx Round-Robin LB | 新副本啟動後自動加入分流，無需手動設定 |
+| 獨立 Cleanup Worker | 封存任務不佔用 API 資源，可獨立調整執行頻率或資源配額 |
+| Prometheus + Grafana | 監控各副本 QPS、延遲、錯誤率，提供擴容決策依據 |
+
+---
 
 ## 社群預覽運作原理
 
@@ -254,66 +387,15 @@ curl http://localhost:8080/api/v1/links/aB3xYz/preview
 
 支援偵測的 Bot：`facebookexternalhit`、`Twitterbot`、`LinkedInBot`、`TelegramBot`、`WhatsApp`、`Slackbot`、`Discordbot`
 
-## 效能設計
+---
 
-| 策略 | 說明 |
-|------|------|
-| Redis 快取 | Redirect 優先查 Redis，cache miss 才查 PostgreSQL |
-| 非同步寫入 | 302 回應後，goroutine 非同步寫入 ClickEvent，不阻塞使用者 |
-| OG 預先抓取 | 建立時抓好存 DB，Bot 來時直接讀取，不重複請求外部頁面 |
+## 本機社群平台真實預覽測試
 
-## Redis 快取機制
-
-### 快取流程
-
-```
-Redirect 請求
-    │
-    ├─→ [1] GetShortLink(code)
-    │       ├─→ null cache 命中 → 直接回傳 404（不查 DB）
-    │       ├─→ cache hit      → 回傳快取資料
-    │       └─→ cache miss ──→ [2] singleflight.Do(code)
-    │                               │  ← 同一 code 的並發請求在此等待 →
-    │                               ├─→ FindByCode(DB)
-    │                               │       ├─→ 找到 → SetShortLink（回填快取）
-    │                               │       └─→ 找不到 → SetNullCache（寫入不存在標記）
-    │                               └─→ 回傳結果給所有等待的 goroutine
-    └─→ 302 redirect / OG HTML
-```
-
-### 三層快取防護
-
-| 防護 | 問題情境 | 實作方式 | 位置 |
-|------|---------|---------|------|
-| **雪崩 (Avalanche)** | 大量 key 同時過期，DB 瞬間承受全部流量 | TTL 基礎 24h ± 20% 隨機 jitter，實際範圍 19.2h ～ 28.8h | `infrastructure/redis/cache.go` `jitteredTTL()` |
-| **擊穿 (Stampede)** | 熱點 key 過期瞬間，N 個並發請求同時 cache miss | `singleflight.Group`：同一 code 並發 miss 只有 1 個 goroutine 查 DB，其餘共用結果 | `application/usecase/redirect_short_link.go` |
-| **穿透 (Penetration)** | 不存在的 code 每次請求都打到 DB | DB 回 nil 時寫入 `__null__` 標記（TTL 5 分鐘），後續請求由 `ErrNullCache` 直接拒絕 | `infrastructure/redis/cache.go` `SetNullCache()` |
-
-### Cache Key 設計
-
-```
-shortlink:{code}      ← 正常短網址資料（TTL: 19.2h ～ 28.8h）
-shortlink:{code}      ← 值為 "__null__" 代表此 code 不存在（TTL: 5 分鐘）
-```
-
-### Sentinel Error 架構
-
-`ErrNullCache` 定義於 `domain/shortlink/errors.go`，讓 `application` 與 `infrastructure` 雙層均可 import，不破壞 DDD 分層依賴方向。
-
-## 後端單元測試
-
-```bash
-cd src/backend
-go test ./application/usecase/...
-```
-
-## 社群平台真實預覽測試
-
-本機無法被社群平台 Bot 存取，需透過以下方式暴露公開 URL：
+本機無法被社群平台 Bot 存取，需透過以下工具暴露公開 URL：
 
 | 工具 | 指令 |
 |------|------|
-| ngrok | `ngrok http 8080` |
-| Cloudflare Tunnel | `cloudflared tunnel --url http://localhost:8080` |
+| ngrok | `ngrok http 3000` |
+| Cloudflare Tunnel | `cloudflared tunnel --url http://localhost:3000` |
 
 取得公開 URL 後，將短網址貼至 Facebook / Telegram / Discord，確認預覽卡片正常顯示。
