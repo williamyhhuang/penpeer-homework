@@ -105,6 +105,10 @@ func TestMain(m *testing.M) {
 	cache := rediscache.NewCache(redisHost, redisPort.Port(), "", 0, rediscache.NullCacheConfig{
 		MaxKeys:    100,
 		EvictCount: 10,
+	}, rediscache.DedupConfig{
+		WindowDuration: 0, // 整合測試不限制去重時間窗口
+		MaxKeys:        0, // 停用水位管控
+		EvictCount:     0,
 	})
 	if err := cache.Ping(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "無法連線 Redis: %v\n", err)

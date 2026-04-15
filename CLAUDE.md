@@ -129,5 +129,5 @@ implementing features and update documentation after making changes.
 ### Rules Should be Followed
 - Always git commit after implementing codes
 - Always implement unit tests for codes
-- Always run unit tests after implementing codes, if unit tests failed, fix it
+- Always run unit tests and integration tests after implementing codes, if tests failed, fix it
 - every config params added to .env file must be added to .env.example file

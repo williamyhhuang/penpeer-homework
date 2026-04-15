@@ -204,7 +204,11 @@ func (c *Cache) DeleteShortLink(ctx context.Context, code string) error {
 // 使用 Redis SET NX + EX 原子操作：key 不存在時寫入並回傳 true（首次點擊）；
 // key 已存在時回傳 false（重複點擊，應跳過寫入 DB）。
 // 若 Redis 操作失敗，回傳 (true, err)：寬鬆策略——寧可多計，不可漏計。
+// WindowDuration == 0 時停用去重，直接放行（測試環境或停用場景使用）。
 func (c *Cache) IsNewClick(ctx context.Context, code, fingerprint string) (bool, error) {
+	if c.dedupCfg.WindowDuration == 0 {
+		return true, nil
+	}
 	key := dedupPrefix + fingerprint + ":" + code
 	ok, err := c.client.SetNX(ctx, key, "1", c.dedupCfg.WindowDuration).Result()
 	if err != nil {
