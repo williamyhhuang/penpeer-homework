@@ -90,8 +90,17 @@ func main() {
 		log.Printf("Bloom filter 初始化完成，載入 %d 筆短碼", len(codes))
 	}
 
-	createUC    := usecase.NewCreateShortLinkUseCase(linkRepo, referralRepo, cache, ogScraper, bloom)
-	redirectUC  := usecase.NewRedirectShortLinkUseCase(linkRepo, clickRepo, cache, bloom)
+	createUC := usecase.NewCreateShortLinkUseCase(
+		linkRepo, referralRepo, cache, ogScraper, bloom,
+		usecase.OGWorkerConfig{Concurrency: cfg.WorkerPool.OGConcurrency},
+	)
+	redirectUC := usecase.NewRedirectShortLinkUseCase(
+		linkRepo, clickRepo, cache, bloom,
+		usecase.ClickWorkerConfig{
+			Workers:   cfg.WorkerPool.ClickWorkers,
+			QueueSize: cfg.WorkerPool.ClickQueueSize,
+		},
+	)
 	previewUC   := usecase.NewGetPreviewUseCase(linkRepo)
 	analyticsUC := usecase.NewGetAnalyticsUseCase(linkRepo, clickRepo)
 	rankingUC   := usecase.NewGetRankingUseCase(clickRepo)
@@ -144,6 +153,12 @@ func main() {
 	if err := metricsSrv.Shutdown(ctx); err != nil {
 		log.Printf("Metrics server 強制關機: %v", err)
 	}
+	// HTTP 停止接收新請求後，等待 worker pool 排空（確保最後一批點擊任務寫入 DB）
+	redirectUC.Shutdown()
+	// 等待進行中的 OG 抓取 goroutine 完成
+	createUC.Shutdown()
+	// 關閉 null cache 淘汰迴圈背景 goroutine
+	cache.Close()
 	log.Println("伺服器已關閉")
 }
 

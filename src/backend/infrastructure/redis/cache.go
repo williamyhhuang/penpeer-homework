@@ -55,9 +55,12 @@ type DedupConfig struct {
 
 // Cache 封裝 Redis 操作，提供短網址的快取功能
 type Cache struct {
-	client   *redis.Client
-	nullCfg  NullCacheConfig
-	dedupCfg DedupConfig
+	client       *redis.Client
+	nullCfg      NullCacheConfig
+	dedupCfg     DedupConfig
+	// evictTrigger 水位淘汰觸發訊號（debounce：同時只跑一個淘汰任務）
+	// 緩衝大小 1：最多等待一個任務排隊，避免每次 null cache miss 都開新 goroutine
+	evictTrigger chan struct{}
 }
 
 func NewCache(host, port, password string, db int, nullCfg NullCacheConfig, dedupCfg DedupConfig) *Cache {
@@ -66,7 +69,27 @@ func NewCache(host, port, password string, db int, nullCfg NullCacheConfig, dedu
 		Password: password,
 		DB:       db,
 	})
-	return &Cache{client: client, nullCfg: nullCfg, dedupCfg: dedupCfg}
+	c := &Cache{
+		client:       client,
+		nullCfg:      nullCfg,
+		dedupCfg:     dedupCfg,
+		evictTrigger: make(chan struct{}, 1),
+	}
+	go c.evictLoop()
+	return c
+}
+
+// evictLoop 淘汰事件處理迴圈，保證同時只有一個 null cache 淘汰任務執行
+// 由 NewCache 啟動，呼叫 Close() 後停止
+func (c *Cache) evictLoop() {
+	for range c.evictTrigger {
+		c.evictIfOverWatermark(context.Background())
+	}
+}
+
+// Close 關閉淘汰迴圈（優雅停機時呼叫，確保背景 goroutine 退出）
+func (c *Cache) Close() {
+	close(c.evictTrigger)
 }
 
 func (c *Cache) Ping(ctx context.Context) error {
@@ -136,7 +159,11 @@ func (c *Cache) SetNullCache(ctx context.Context, code string) error {
 	}
 
 	// 非同步觸發水位檢查，不阻塞寫入主流程
-	go c.evictIfOverWatermark(context.Background())
+	// 使用 debounce channel：同時只允許一個淘汰任務排隊，避免每次 miss 都開新 goroutine
+	select {
+	case c.evictTrigger <- struct{}{}:
+	default: // 已有淘汰任務排隊或執行中，跳過
+	}
 	return nil
 }
 

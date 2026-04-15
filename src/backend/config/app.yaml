@@ -21,3 +21,8 @@ click_dedup:
   window_hours: 24    # 去重時間窗口（小時）。同一 IP + 同一短碼在此窗口內只計一次點擊
   max_keys: 0         # 水位閥值：0 = 停用水位管控（24h 窗口自然過期，通常無需額外管控）
   evict_count: 50000  # 每次淘汰數量（max_keys > 0 時生效）
+
+worker_pool:
+  click_workers: 20      # click 寫入 worker goroutine 數（有界 pool，防高流量無限開 goroutine）
+  click_queue_size: 500  # click 任務緩衝佇列大小，超過時丟棄並計入 dropped 指標
+  og_concurrency: 10     # OG 抓取最大並發數（semaphore 上限，保護外部 HTTP 連線數）

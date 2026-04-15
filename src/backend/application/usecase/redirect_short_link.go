@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -49,6 +50,24 @@ type RedirectOutput struct {
 	OGHTML      string // 社群 Bot 專用的 OG HTML
 }
 
+// clickJob click worker pool 的任務資料包
+type clickJob struct {
+	shortLinkCode string
+	detected      uadetect.DetectResult
+	region        string
+	referralCode  string
+	clientIP      string
+	userAgent     string
+}
+
+// ClickWorkerConfig click worker pool 設定
+type ClickWorkerConfig struct {
+	// Workers worker goroutine 數量（固定大小 pool）
+	Workers int
+	// QueueSize 任務緩衝佇列大小，超過時丟棄並計入 dropped 指標
+	QueueSize int
+}
+
 // RedirectShortLinkUseCase 實作「短網址重新導向」的核心業務邏輯
 type RedirectShortLinkUseCase struct {
 	linkRepo  shortlink.Repository
@@ -57,6 +76,9 @@ type RedirectShortLinkUseCase struct {
 	bloom     CodeBloom // 第一道篩查：確定不存在的 code 直接拒絕，不查 Redis 也不查 DB
 	// sfGroup 防止快取擊穿：同一 code 的並發 miss 只允許一個 goroutine 查 DB
 	sfGroup singleflight.Group
+	// clickChan / clickWg：有界 worker pool，避免每次轉導都開新 goroutine
+	clickChan chan clickJob
+	clickWg   sync.WaitGroup
 }
 
 func NewRedirectShortLinkUseCase(
@@ -64,13 +86,40 @@ func NewRedirectShortLinkUseCase(
 	clickRepo click.Repository,
 	cache RedirectCache,
 	bloom CodeBloom,
+	opts ...ClickWorkerConfig,
 ) *RedirectShortLinkUseCase {
-	return &RedirectShortLinkUseCase{
+	cfg := ClickWorkerConfig{Workers: 10, QueueSize: 500} // 預設值
+	if len(opts) > 0 {
+		if opts[0].Workers > 0 {
+			cfg.Workers = opts[0].Workers
+		}
+		if opts[0].QueueSize > 0 {
+			cfg.QueueSize = opts[0].QueueSize
+		}
+	}
+	uc := &RedirectShortLinkUseCase{
 		linkRepo:  linkRepo,
 		clickRepo: clickRepo,
 		cache:     cache,
 		bloom:     bloom,
+		clickChan: make(chan clickJob, cfg.QueueSize),
 	}
+	for i := 0; i < cfg.Workers; i++ {
+		uc.clickWg.Add(1)
+		go func() {
+			defer uc.clickWg.Done()
+			for job := range uc.clickChan {
+				uc.asyncSaveClick(job.shortLinkCode, job.detected, job.region, job.referralCode, job.clientIP, job.userAgent)
+			}
+		}()
+	}
+	return uc
+}
+
+// Shutdown 優雅停機：關閉任務佇列，等待所有 worker 處理完佇列中的任務後退出
+func (uc *RedirectShortLinkUseCase) Shutdown() {
+	close(uc.clickChan)
+	uc.clickWg.Wait()
 }
 
 func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectInput) (*RedirectOutput, error) {
@@ -143,7 +192,20 @@ func (uc *RedirectShortLinkUseCase) Execute(ctx context.Context, input RedirectI
 	region := uadetect.ExtractRegion(input.CFIPCountry, input.XCountry)
 
 	// 5. 非同步寫入 ClickEvent（不阻塞 redirect 回應）
-	go uc.asyncSaveClick(link.Code, detected, region, input.ReferralCode, input.ClientIP, input.UserAgent)
+	// 送入有界 worker pool；佇列已滿時丟棄並計入 dropped 指標（高流量保護）
+	job := clickJob{
+		shortLinkCode: link.Code,
+		detected:      detected,
+		region:        region,
+		referralCode:  input.ReferralCode,
+		clientIP:      input.ClientIP,
+		userAgent:     input.UserAgent,
+	}
+	select {
+	case uc.clickChan <- job:
+	default:
+		metrics.ClicksRecordedTotal.WithLabelValues("dropped").Inc()
+	}
 
 	// 6. 社群 Bot → 回傳含 OG meta tags 的 HTML，讓平台顯示預覽
 	if detected.IsBot {

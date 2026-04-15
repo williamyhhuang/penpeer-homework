@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/penpeer/shortlink/application/codegen"
@@ -31,6 +32,12 @@ type CreateShortLinkOutput struct {
 	ReferralCode *referral.ReferralCode // 若有推薦碼則填入
 }
 
+// OGWorkerConfig OG 抓取 semaphore 設定
+type OGWorkerConfig struct {
+	// Concurrency 最大並發 OG 抓取數（semaphore 大小）
+	Concurrency int
+}
+
 // CreateShortLinkUseCase 實作「建立短網址」的業務邏輯
 type CreateShortLinkUseCase struct {
 	linkRepo     shortlink.Repository
@@ -38,6 +45,10 @@ type CreateShortLinkUseCase struct {
 	cache        ShortLinkCache
 	scraper      *scraper.OGScraper
 	bloom        CodeBloom // 建立成功後更新 bloom filter，確保後續 redirect 不誤判
+	// ogSem semaphore：限制同時進行的 OG 抓取 goroutine 數量
+	// 防止大量建立請求同時對外部網站發起 HTTP 連線
+	ogSem chan struct{}
+	ogWg  sync.WaitGroup
 }
 
 func NewCreateShortLinkUseCase(
@@ -46,14 +57,25 @@ func NewCreateShortLinkUseCase(
 	cache ShortLinkCache,
 	sc *scraper.OGScraper,
 	bloom CodeBloom,
+	opts ...OGWorkerConfig,
 ) *CreateShortLinkUseCase {
+	concurrency := 10 // 預設：最多 10 個並發 OG 抓取
+	if len(opts) > 0 && opts[0].Concurrency > 0 {
+		concurrency = opts[0].Concurrency
+	}
 	return &CreateShortLinkUseCase{
 		linkRepo:     linkRepo,
 		referralRepo: referralRepo,
 		cache:        cache,
 		scraper:      sc,
 		bloom:        bloom,
+		ogSem:        make(chan struct{}, concurrency),
 	}
+}
+
+// Shutdown 優雅停機：等待所有進行中的 OG 抓取 goroutine 完成
+func (uc *CreateShortLinkUseCase) Shutdown() {
+	uc.ogWg.Wait()
 }
 
 func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShortLinkInput) (*CreateShortLinkOutput, error) {
@@ -88,7 +110,19 @@ func (uc *CreateShortLinkUseCase) Execute(ctx context.Context, input CreateShort
 
 	// 6. 非同步抓取 OG 資料：不阻塞當前請求，背景完成後回寫 DB
 	// 設計理由：OG 資料只用於 preview（Bot 訪問），不影響短網址轉導核心功能
-	go uc.fetchAndUpdateOG(code, input.URL)
+	// semaphore 保護：最多 ogSem 個並發抓取，防止同時大量外連
+	select {
+	case uc.ogSem <- struct{}{}:
+		uc.ogWg.Add(1)
+		go func() {
+			defer uc.ogWg.Done()
+			defer func() { <-uc.ogSem }()
+			uc.fetchAndUpdateOG(code, input.URL)
+		}()
+	default:
+		// semaphore 已滿，跳過此次 OG 抓取（不影響短網址轉導核心功能）
+		log.Printf("[OG] semaphore 已滿，跳過抓取 code=%s", code)
+	}
 
 	// 7. 更新 bloom filter，確保後續 redirect 不會因 filter 未知此 code 而誤判為不存在
 	if uc.bloom != nil {

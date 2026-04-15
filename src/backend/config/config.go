@@ -17,6 +17,17 @@ type App struct {
 	Bloom      Bloom      `yaml:"bloom"`
 	Cleanup    Cleanup    `yaml:"cleanup"`
 	ClickDedup ClickDedup `yaml:"click_dedup"`
+	WorkerPool WorkerPool `yaml:"worker_pool"`
+}
+
+// WorkerPool 有界 goroutine pool 設定（防止高流量下 goroutine 無上限增長）
+type WorkerPool struct {
+	// ClickWorkers click 寫入 worker goroutine 數量
+	ClickWorkers int `yaml:"click_workers"`
+	// ClickQueueSize click 任務緩衝佇列大小，超過時丟棄（保護記憶體）
+	ClickQueueSize int `yaml:"click_queue_size"`
+	// OGConcurrency OG 抓取最大並發數（semaphore 上限）
+	OGConcurrency int `yaml:"og_concurrency"`
 }
 
 // NullCache null cache 水位管控閾值
