@@ -83,6 +83,8 @@ go test -v -tags integration ./tests/integration/...
 
 #### 測試覆蓋範圍
 
+**API 流程測試**
+
 | 測試函式 | 驗證內容 |
 |---|---|
 | `TestCreateAndRedirect` | 建立短網址 → GET `/:code` → 302 redirect 到原始 URL |
@@ -93,6 +95,17 @@ go test -v -tags integration ./tests/integration/...
 | `TestRedirect_NotFound` | 不存在的短碼回傳 404 |
 | `TestCreateWithReferral_ResponseContainsReferralCode` | 建立時帶 `referral_owner_id`，回應包含 `referral_code` |
 | `TestMultipleClicks_CountAccumulates` | 多次點擊後 `total_clicks` 正確累加 |
+
+**Cleanup Worker 封存測試**
+
+| 測試函式 | 驗證內容 |
+|---|---|
+| `TestArchiveExpiredLinks_過期短網址移至封存表` | 過期短網址 + 關聯 referral_codes + click_events 全部移至封存表，主表清除 |
+| `TestArchiveExpiredLinks_未過期短網址不受影響` | `expires_at` 在未來或 NULL 的短網址不被封存 |
+| `TestArchiveExpiredLinks_無過期資料時回傳0` | 無過期資料時 count = 0 且不報錯 |
+| `TestArchiveOldClicks_舊點擊事件移至封存表` | 超過保留天數的 click_events 移至封存表，保留期內點擊不動 |
+| `TestArchiveOldClicks_近期點擊不受影響` | 保留期內全部點擊一律不封存 |
+| `TestCleanupWorker_完整執行流程` | Step 1（封存過期短網址）→ Step 2（封存 active 短網址的舊點擊）完整流程驗證 |
 
 #### 技術架構
 

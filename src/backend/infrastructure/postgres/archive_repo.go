@@ -55,12 +55,13 @@ func (r *ArchiveRepo) ArchiveExpiredShortLinks(ctx context.Context) (int64, erro
 		}
 
 		// Step 1c：封存 referral_codes（依過期短碼）
+		// 使用 IN (?) 而非 ANY(?)，GORM 會將 []string 自動展開為 IN ('a','b',...)
 		if err := tx.Exec(`
 			INSERT INTO referral_codes_archive
 				(code, owner_id, short_link_code, created_at, archived_at)
 			SELECT code, owner_id, short_link_code, created_at, NOW()
 			FROM referral_codes
-			WHERE short_link_code = ANY(?)
+			WHERE short_link_code IN (?)
 		`, codes).Error; err != nil {
 			return fmt.Errorf("封存 referral_codes 失敗: %w", err)
 		}
@@ -71,7 +72,7 @@ func (r *ArchiveRepo) ArchiveExpiredShortLinks(ctx context.Context) (int64, erro
 				(id, short_link_code, clicked_at, platform, region, device_type, referral_code, archived_at)
 			SELECT id, short_link_code, clicked_at, platform, region, device_type, referral_code, NOW()
 			FROM click_events
-			WHERE short_link_code = ANY(?)
+			WHERE short_link_code IN (?)
 		`, codes).Error; err != nil {
 			return fmt.Errorf("封存 click_events 失敗: %w", err)
 		}
