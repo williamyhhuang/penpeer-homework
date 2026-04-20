@@ -78,9 +78,10 @@ func main() {
 	clickRepo    := postgres.NewClickRepo(db)
 	ogScraper    := scraper.NewOGScraper()
 
-	// ── Bloom Filter 初始化（啟動時從 DB 載入所有短碼）──────────────────────
-	// 誤判率 1%：最多 1% 的不存在 code 被誤判為存在（仍需查 Redis/DB 確認）
-	bloom := bloomfilter.New(uint(cfg.Bloom.Capacity), 0.01)
+	// ── Bloom Filter 初始化（Redis 分散式版本，所有 pod 共用同一 bitmap）────
+	// 改用 Redis Bitmap 後各 pod 狀態一致，不再因 local memory 各自為政而回傳 404。
+	// 誤判率 1%：最多 1% 的不存在 code 被誤判為存在（仍需查 Redis/DB 確認）。
+	bloom := bloomfilter.NewRedis(cache.Client(), uint(cfg.Bloom.Capacity), 0.01)
 	if codes, err := linkRepo.FindAllCodes(context.Background()); err != nil {
 		log.Printf("警告：bloom filter 初始化失敗（%v），退化為無 bloom filter 模式", err)
 	} else {

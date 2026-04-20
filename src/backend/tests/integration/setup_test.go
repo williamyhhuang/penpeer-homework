@@ -123,8 +123,8 @@ func TestMain(m *testing.M) {
 
 	testEnv.pgClickRepo = clickRepo
 
-	// Bloom filter：整合測試容量設小，FP rate 1%
-	bloom := bloomfilter.New(10000, 0.01)
+	// Bloom filter：使用 Redis 分散式版本，與正式環境一致
+	bloom := bloomfilter.NewRedis(cache.Client(), 10000, 0.01)
 
 	// 整合測試 rate limit 設極高，避免連續請求被封鎖
 	rlCfg := middleware.RateLimitConfig{RPS: 10000, Burst: 10000}

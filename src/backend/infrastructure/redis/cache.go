@@ -96,6 +96,11 @@ func (c *Cache) Ping(ctx context.Context) error {
 	return c.client.Ping(ctx).Err()
 }
 
+// Client 回傳底層 *redis.Client，供需要共用連線的元件使用（例如 Redis Bloom Filter）
+func (c *Cache) Client() *redis.Client {
+	return c.client
+}
+
 // jitteredTTL 在基礎 TTL 上加入 ±jitter 的隨機抖動
 // 避免大量 key 同時到期造成快取雪崩
 func jitteredTTL() time.Duration {
